@@ -1,48 +1,36 @@
+<program> ::= { <top_level_declaration> } EOF
 
-<program> ::= <func_definition> | <variable_declaration>
+<top_level_declaration> ::= <function_definition> | <variable_declaration> ";"
 
-<func_definition> ::= <func_header> <func_body>
-
-<function_header> ::= "f" ":" <func_name> "(" [<parameter_list>] ")" "->" <type>
-
-<func_name> ::= <id> | "main"
-
-<function_body> ::= "{" <statements> "}"
-
-<parameter_list> ::= <parameter> | <parameter> "," <parameter_list>
-
+<function_definition> ::= "f" ":" <function_header> <block>
+<function_header> ::= <function_name> "(" [ <parameter_list> ] ")" "->" <type>
+<function_name> ::= <id> | "main"
+<parameter_list> ::= <parameter> { "," <parameter> }
 <parameter> ::= <type> ":" <id>
 
-<statements> ::= <statement> | <statement> <statements>
-
+<block> ::= "{" { <statement> } "}"
 <statement> ::= <variable_declaration> ";"
-		| <assignment> ";"
-		| <return_statement> ";"
-                | <func_call> ";"
+              | <assignment> ";"
+              | <return_statement> ";"
+              | <function_call> ";"
+              | <block> [ ";" ]
 
-<func_call> ::= <id> "(" [<arguments>] ")"
+<variable_declaration> ::= <type> ":" <id> [ "=" <expression> ]
+<assignment> ::= <id> "=" <expression>
+<return_statement> ::= "return" [ <expression> ]
+<function_call> ::= <id> "(" [ <argument_list> ] ")"
+<argument_list> ::= <expression> { "," <expression> }
 
-<arguments> ::= <expr> | <expr> "," <arguments>
+<expression> ::= <additive_expression>
+<additive_expression> ::= <multiplicative_expression>
+                          { ( "+" | "-" ) <multiplicative_expression> }
+<multiplicative_expression> ::= <primary_expression>
+                                { ( "*" | "/" ) <primary_expression> }
+<primary_expression> ::= <id>
+                       | <literal>
+                       | <function_call>
+                       | "(" <expression> ")"
 
-<variable_declaration> ::= <type> ":" <id> | <type> ":" <assignment>
-
-<return_statement> ::= "return" <expr>
-
-<assignment> ::= <id> "=" <expr>
-
-<expression> ::= <term> | <term> <operator> <expression>
-
-<term> ::= <id>
-         | <literal>
-         | <identifier> <operator> <identifier> 
-         | <identifier> <operator> <literal> 
-         | <literal> <operator> <identifier> 
-         | "(" <expression> ")" 
-         | <expression> <operator> <expression>
-         | <func_call>
-
-<id> ::= <letter> {<letter>}*
-
+<id> ::= <letter> { <letter> }*
 <type> ::= "int" | "float" | "str" | "bool" | "void" | "char"
-<operator> ::= "+" | "-" | "*" | "/"
-
+<literal> ::= <int_literal> | <float_literal> | <char_literal> | <string_literal> | "true" | "false"

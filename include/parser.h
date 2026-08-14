@@ -51,6 +51,9 @@ AST* parse_id(parser* p);
 AST* parse_statements(parser *p);
 AST* parse_statement(parser *p);
 AST* parse_term(parser *p);
+AST* parse_primary(parser *p);
+AST* parse_multiplicative_expr(parser *p);
+AST* parse_additive_expr(parser *p);
 AST* parse_expr(parser *p);
 AST* parse_return(parser *p);
 

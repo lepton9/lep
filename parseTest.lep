@@ -12,11 +12,11 @@ f:funcname(int:first, int:second) -> int {
   }
   int:a = 2;
   float:flt;
-  ret a;
+  return a;
 }
 
 f:func() -> void {
-  ret;
+  return;
 }
 
 f:main() -> int {
@@ -24,7 +24,6 @@ f:main() -> int {
   funcname(1,2);
   int:r = funcname(1, 2 + funcname(1 - 1, 2)) + 2;
   str:s = "string";
-  ret 0;
+  return 0;
 }
-
 

@@ -147,7 +147,7 @@ tokenType isKeyword(Lexer *lexer, const char* value) {
   if (strcmp(value, "true") == 0) return T_KW_TRUE;
   if (strcmp(value, "false") == 0) return T_KW_FALSE;
   if (strcmp(value, "main") == 0) return T_KW_MAIN;
-  if (strcmp(value, "ret") == 0) return T_KW_RET;
+  if (strcmp(value, "return") == 0) return T_KW_RET;
   return T_IDENTIFIER;
 }
 
@@ -240,4 +240,3 @@ char* getLine(const char* src, const size_t srcLen, const int ln) {
   memcpy(line, src + startI, len);
   return line;
 }
-

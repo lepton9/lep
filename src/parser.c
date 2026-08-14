@@ -187,6 +187,8 @@ AST* parse_func_body(parser* p) {
 
 AST* parse_func_params(parser* p) {
   AST* params = initAST(AST_PARAMETERS, NULL);
+  if (p->token->type == T_PAREN_R) return params;
+
   params->l = parse_func_param(p);
   AST* cur = params->l;
   while(accept(p, T_COMMA)) {
@@ -201,7 +203,7 @@ AST* parse_func_param(parser* p) {
   return (isType(p)) ? parse_var_decl(p) : NULL;
 }
 
-AST* parse_term(parser *p) {
+AST* parse_primary(parser *p) {
   AST* term = NULL;
   token* t = p->token;
   if (p->token->type == T_IDENTIFIER && peekToken(p)->type == T_PAREN_L) {
@@ -217,6 +219,10 @@ AST* parse_term(parser *p) {
     error_parse(p, "Unknown term", NULL);
   }
   return term;
+}
+
+AST* parse_term(parser *p) {
+  return parse_primary(p);
 }
 
 AST* parse_var_decl(parser* p) {
@@ -330,16 +336,34 @@ AST* parse_return(parser *p) {
   return ret_node;
 }
 
-AST* parse_expr(parser* p) {
-  AST* term = parse_term(p);
-  token* t = p->token;
-  while (acceptOp(p)) {
-    AST* op_node = initAST(AST_OPERATOR, t);
-    op_node->l = term;
-    op_node->r = parse_term(p);
-    term = op_node;
+AST* parse_multiplicative_expr(parser* p) {
+  AST* expr = parse_primary(p);
+  while (p->token->type == T_ASTERISK || p->token->type == T_SLASH) {
+    token* op = p->token;
+    nextToken(p);
+    AST* op_node = initAST(AST_OPERATOR, op);
+    op_node->l = expr;
+    op_node->r = parse_primary(p);
+    expr = op_node;
   }
-  return term;
+  return expr;
+}
+
+AST* parse_additive_expr(parser* p) {
+  AST* expr = parse_multiplicative_expr(p);
+  while (p->token->type == T_PLUS || p->token->type == T_MINUS) {
+    token* op = p->token;
+    nextToken(p);
+    AST* op_node = initAST(AST_OPERATOR, op);
+    op_node->l = expr;
+    op_node->r = parse_multiplicative_expr(p);
+    expr = op_node;
+  }
+  return expr;
+}
+
+AST* parse_expr(parser* p) {
+  return parse_additive_expr(p);
 }
 
 int digits(int n)
@@ -362,5 +386,4 @@ int digits(int n)
 //   printf("%*c^\n", p->token->loc.column + digits(p->token->loc.line) + 1, ' ');
 //   exit(1);
 // }
-
 

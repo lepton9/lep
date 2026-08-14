@@ -1,12 +1,8 @@
 #include "../include/analyzer.h"
 #include "../include/errorlep.h"
-#include "../include/codegen.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-
-
-asmf* af = NULL;
 
 symtabStack* init_st_stack() {
   symtabStack* sts = malloc(sizeof(symtabStack));
@@ -94,7 +90,6 @@ stEntry* newVariable(symtabStack* sts, const char* id, const TYPE type) {
 
 void semanticAnalysis(symtabStack* sts, AST* ast) {
   if (ast == NULL) return;
-  if (af == NULL) af = initAsmfile("out.txt"); // TODO: temporary
 
   switch(ast->type) {
     case AST_FUNCTION: {
@@ -110,14 +105,12 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
       f->f_info = malloc(sizeof(func_info));
       f->f_info->ret_type = convertType(ast->l->l->next->next->tok->type);
       f->f_info->n_params = 0;
-      int regI = 1;
+      f->f_info->params = NULL;
       while (param) {
-        assert(regI <= 6); // TODO: remaining params to stack
         f->f_info->params = realloc(f->f_info->params, sizeof(parameter) * (f->f_info->n_params + 1));
-        f->f_info->params[f->f_info->n_params] = (parameter){param->r->tok->value, convertType(param->l->tok->type), regI};
+        f->f_info->params[f->f_info->n_params] = (parameter){param->r->tok->value, convertType(param->l->tok->type), 0};
         assert(param->type == AST_VARIABLE);
         f->f_info->n_params++;
-        regI++;
         param = param->next;
       }
       enter_scope(sts);
@@ -128,8 +121,6 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
         c->returned = false;
         c->ret_scope = -1;
         add_to_begin(sts->contexts, c);
-
-        compile_func_def(af, sts, f);
 
         semanticAnalysis(sts, header);
         semanticAnalysis(sts, body);
@@ -168,7 +159,6 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
       if (!matchType(ret_type, func_ret_type)) {
         error_type("Wrong function return type", ast->tok->loc, ret_type, func_ret_type);
       }
-      compile_ret(af, sts, ast->l, sizeOfType(ret_type));
       break;
     }
     case AST_FCALL: {
@@ -177,10 +167,8 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
     }
     case AST_BLOCK: {
       enter_scope(sts);
-      init_stackframe(af, 2048);
       semanticAnalysis(sts, ast->l);
       print_symtab(stdout, currentScope(sts));
-      exit_stackframe(af);
       exit_scope(sts);
       semanticAnalysis(sts, ast->next);
       return;
@@ -194,24 +182,16 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
       stEntry* var = newVariable(sts, id->tok->value, convertType(ast->l->tok->type));
       var->declLine = id->tok->loc.line;
 
-      char compiled = 0;
-      if (sts->cur_scope == 0) {
-        compile_global_var(af, var, NULL);
-        compiled = 1;
-      }
-      else if (sts->contexts->head) {
+      if (sts->contexts->head) {
         context* c = sts->contexts->head->data;
         stEntry* f = lookup_all(sts, c->func_name);
         for (int i = 0; i < f->f_info->n_params; i++) {
           if (strcmp(f->f_info->params[i].name, var->name) == 0) {
             var->value = ast;
-            compile_param(af, var, f->f_info->params[i].regI);
-            compiled = 1;
             break;
           }
         }
       }
-      if (!compiled) compile_var(af, var);
       break;
     }
     case AST_ASSIGNMENT: {
@@ -375,4 +355,3 @@ void checkAST(AST* root) {
   free_st_stack(st_stack);
 
 }
-
