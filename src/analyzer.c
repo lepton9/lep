@@ -1,15 +1,12 @@
 #include "../include/analyzer.h"
 #include "../include/errorlep.h"
 #include <assert.h>
-#include <stdio.h>
 #include <string.h>
 
 symtabStack* init_st_stack() {
   symtabStack* sts = malloc(sizeof(symtabStack));
   sts->cur_scope = 0;
-  sts->memOffsets = create_list();
   sts->s = create_list();
-  sts->contexts = create_list();
   symtab* global_st = initSymbolTable();
   add_to_begin(sts->s, global_st);
   return sts;
@@ -21,8 +18,6 @@ void free_st_stack(symtabStack* sts) {
     freeSymbolTable(st);
   }
   free(sts->s);
-  free(sts->contexts);
-  free(sts->memOffsets);
   free(sts);
 }
 
@@ -45,51 +40,16 @@ symtab* currentScope(symtabStack* sts) {
   return sts->s->head->data;
 }
 
-int sizeOfType(const TYPE type) {
-  switch (type) {
-    case INT:
-      return sizeof(int);
-    case FLOAT:
-      return sizeof(float);
-    case CHAR:
-      return sizeof(char);
-    case STR:
-      return sizeof(char*);
-    case BOOL:
-      return sizeof(bool);
-    case F:
-      return 0;
-    case VOID:
-      return 0;
-  }
-  return 0;
-}
-
-bool allocMem(symtabStack* sts, stEntry* e, const int size) {
-  if (*(int*)sts->memOffsets->head->data + size > MAX_MEM) return false;
-  e->size = size;
-  e->address = *(int*)sts->memOffsets->head->data;
-  *(int*)sts->memOffsets->head->data += size;
-  // sts->memOffset += 4; // Every variable would be 4 bytes
-  return true;
-}
-
 stEntry* newVariable(symtabStack* sts, const char* id, const TYPE type) {
   stEntry* var = st_insert(currentScope(sts), id);
   var->type = type;
-  var->value = NULL;
-  var->scope = sts->cur_scope;
-  if (sts->cur_scope == 0 || type == F) {
-    var->size = sizeOfType(type);
-    var->address = -1;
-  } else {
-    allocMem(sts, var, sizeOfType(var->type));
-  }
+  var->is_initialized = false;
   return var;
 }
 
-void semanticAnalysis(symtabStack* sts, AST* ast) {
+void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
   if (ast == NULL) return;
+  symtabStack* sts = analyzer->symbols;
 
   switch(ast->type) {
     case AST_FUNCTION: {
@@ -108,22 +68,23 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
       f->f_info->params = NULL;
       while (param) {
         f->f_info->params = realloc(f->f_info->params, sizeof(parameter) * (f->f_info->n_params + 1));
-        f->f_info->params[f->f_info->n_params] = (parameter){param->r->tok->value, convertType(param->l->tok->type), 0};
+        f->f_info->params[f->f_info->n_params] = (parameter){param->r->tok->value, convertType(param->l->tok->type)};
         assert(param->type == AST_VARIABLE);
         f->f_info->n_params++;
         param = param->next;
       }
       enter_scope(sts);
       {
+        context* previous_function = analyzer->current_function;
         context* c = malloc(sizeof(context));
         c->ret_type = f->f_info->ret_type;
         c->func_name = f->name;
         c->returned = false;
         c->ret_scope = -1;
-        add_to_begin(sts->contexts, c);
+        analyzer->current_function = c;
 
-        semanticAnalysis(sts, header);
-        semanticAnalysis(sts, body);
+        semanticAnalysis(analyzer, header);
+        semanticAnalysis(analyzer, body);
 
         if (f->f_info->ret_type != VOID) {
           if (!c->returned) {
@@ -134,20 +95,18 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
           }
         }
 
-        pop_front(sts->contexts);
+        analyzer->current_function = previous_function;
         free(c);
-        // printf("Function scope variables %d\n", (int)currentScope(sts)->n);
-        print_symtab(stdout, currentScope(sts));
       }
       exit_scope(sts);
-      semanticAnalysis(sts, ast->next);
+      semanticAnalysis(analyzer, ast->next);
       return;
     }
     case AST_RET: {
       TYPE ret_type = (ast->l) ? expr_type(sts, ast->l) : VOID;
       TYPE func_ret_type;
-      if (!is_empty(sts->contexts)) {
-        context* c = sts->contexts->head->data;
+      if (analyzer->current_function != NULL) {
+        context* c = analyzer->current_function;
         func_ret_type = c->ret_type;
         c->returned = true;
         if (c->ret_scope < 0 || c->ret_scope > sts->cur_scope) {
@@ -167,10 +126,9 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
     }
     case AST_BLOCK: {
       enter_scope(sts);
-      semanticAnalysis(sts, ast->l);
-      print_symtab(stdout, currentScope(sts));
+      semanticAnalysis(analyzer, ast->l);
       exit_scope(sts);
-      semanticAnalysis(sts, ast->next);
+      semanticAnalysis(analyzer, ast->next);
       return;
     }
     case AST_VARIABLE: {
@@ -182,12 +140,12 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
       stEntry* var = newVariable(sts, id->tok->value, convertType(ast->l->tok->type));
       var->declLine = id->tok->loc.line;
 
-      if (sts->contexts->head) {
-        context* c = sts->contexts->head->data;
+      if (analyzer->current_function != NULL) {
+        context* c = analyzer->current_function;
         stEntry* f = lookup_all(sts, c->func_name);
         for (int i = 0; i < f->f_info->n_params; i++) {
           if (strcmp(f->f_info->params[i].name, var->name) == 0) {
-            var->value = ast;
+            var->is_initialized = true;
             break;
           }
         }
@@ -196,15 +154,15 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
     }
     case AST_ASSIGNMENT: {
       typecheck_assignment(sts, ast->l, ast->r);
-      semanticAnalysis(sts, ast->next);
+      semanticAnalysis(analyzer, ast->next);
       return;
     }
     default:
       break;
   }
-  semanticAnalysis(sts, ast->l);
-  semanticAnalysis(sts, ast->r);
-  semanticAnalysis(sts, ast->next);
+  semanticAnalysis(analyzer, ast->l);
+  semanticAnalysis(analyzer, ast->r);
+  semanticAnalysis(analyzer, ast->next);
 }
 
 // To be deleted
@@ -269,7 +227,7 @@ TYPE expr_type(symtabStack* sts, AST* expr) {
     if (!var) {
       error_nodecl("Access", expr->tok->value, expr->tok->loc);
     }
-    if (!var->value) {
+    if (!var->is_initialized) {
       error_value(var->name, var->type, expr->tok->loc);
     }
     type = var->type;
@@ -311,13 +269,13 @@ bool typecheck_assignment(symtabStack* sts, AST* lhs, AST* rhs) {
   if (!var) {
     error_nodecl("Assignment", id, lhs->tok->loc);
   }
-  var->value = rhs;
   lhs_type = var->type;
   rhs_type = expr_type(sts, rhs);
 
   if (!matchType(lhs_type, rhs_type)) {
     error_type("Trying to assign a value of the wrong type", lhs->tok->loc, rhs_type, lhs_type);
   }
+  var->is_initialized = true;
   return true;
 }
 
@@ -329,15 +287,18 @@ int typecheck_operator(symtabStack* sts, AST* lhs, AST* rhs) {
   else return -1;
 }
 
-void checkAST(AST* root) {
-  symtabStack* st_stack = init_st_stack();
+SemanticResult* analyzeAST(AST* root) {
+  SemanticAnalyzer analyzer = {init_st_stack(), NULL};
+  semanticAnalysis(&analyzer, root);
+  assert(analyzer.symbols->cur_scope == 0);
 
-  semanticAnalysis(st_stack, root);
+  SemanticResult* result = malloc(sizeof(SemanticResult));
+  result->symbols = analyzer.symbols;
+  return result;
+}
 
-  assert(st_stack->cur_scope == 0);
-  printf("\nGlobal scope:\n");
-  print_symtab(stdout, st_stack->s->head->data);
-
-  free_st_stack(st_stack);
-
+void freeSemanticResult(SemanticResult* result) {
+  if (result == NULL) return;
+  free_st_stack(result->symbols);
+  free(result);
 }

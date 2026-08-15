@@ -1,5 +1,7 @@
 #include "../include/regalloc.h"
 
+// FIX: this file is deprecated
+
 const char* selReg(const int regI, const int size) {
   switch (size) {
     case 8: return regs[regI].r64;

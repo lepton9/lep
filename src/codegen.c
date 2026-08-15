@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 
+// FIX: this file is deprecated
+
 asmf* initAsmfile(const char* fname) {
   asmf* af = malloc(sizeof(asmf));
   af->file = fopen(fname, "w");

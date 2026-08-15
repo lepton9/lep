@@ -6,8 +6,6 @@
 #include "../include/LList.h"
 #include <stdio.h>
 
-#define MAX_MEM 10000
-
 typedef enum {
   INT = 200,
   FLOAT,
@@ -21,7 +19,6 @@ typedef enum {
 typedef struct {
   char* name;
   TYPE type;
-  int regI;
 } parameter;
 
 typedef struct {
@@ -32,25 +29,16 @@ typedef struct {
 
 typedef struct {
   char* name;
-  int type;
-  int scope;
+  TYPE type;
   int declLine;
-  LList* usageLines;
-  size_t size;
-  int address;
-  int slot; // Stack slot
+  bool is_initialized;
   func_info* f_info;
-  AST* value;
-  int version;
-  int version_counter;
 } stEntry;
 
 typedef hashtab symtab;
 
 typedef struct {
   LList* s;
-  LList* contexts;
-  LList* memOffsets;
   int cur_scope;
 } symtabStack;
 

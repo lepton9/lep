@@ -12,6 +12,14 @@ typedef struct {
   int ret_scope;
 } context;
 
+typedef struct {
+  symtabStack* symbols;
+  context* current_function;
+} SemanticAnalyzer;
+
+typedef struct {
+  symtabStack* symbols;
+} SemanticResult;
 
 symtab* currentScope(symtabStack* sts);
 void enter_scope(symtabStack* sts);
@@ -21,15 +29,14 @@ bool matchType(const int a, const int b);
 int funcRetType(AST* f); // To be deleted
 TYPE convertType(const int type);
 
-int sizeOfType(const TYPE type);
-bool allocMem(symtabStack* sts, stEntry* e, const int size);
 stEntry* newVariable(symtabStack* sts, const char* id, const TYPE type);
 
 stEntry* lookup_all(symtabStack* sts, const char* key);
 stEntry* lookup_scope(symtab* st, const char* key);
 
-void checkAST(AST* root);
-void semanticAnalysis(symtabStack* sts, AST* ast);
+SemanticResult* analyzeAST(AST* root);
+void freeSemanticResult(SemanticResult* result);
+void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast);
 
 TYPE expr_type(symtabStack* sts, AST* expr);
 

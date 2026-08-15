@@ -33,20 +33,6 @@ char* getBaseName(const char* var) {
   return baseName;
 }
 
-void inc_var_version(symtab* st, const char* name) {
-  stEntry* e = st_lookup(st, name);
-  if (e) {
-    e->version_counter++;
-    stEntry* new_e = st_insert(st, var_name(name, e->version_counter));
-    new_e->version = e->version_counter;
-    new_e->version_counter = 1;
-  } else {
-    stEntry* new_e = st_insert(st, name);
-    new_e->version = 0;
-    new_e->version_counter = 0;
-  }
-}
-
 // TODO: add type of the operand and dest vars
 // TODO: modify to allow constants as operands
 instruction* create_instruction(opcode op, char* dest, char* src1, char* src2) {
@@ -121,4 +107,3 @@ ssa_node* addSSA_assign_g(ssa* ssa, symtabStack* sts, AST* ast) {
   // ssaNode->value.i = create_instruction(opcode op, int dest, int src1, int src2);
   return ssaNode;
 }
-

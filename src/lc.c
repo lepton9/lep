@@ -26,7 +26,8 @@ void lccompile(lc *lc) {
   }
   lc->root = parse(lc->parser);
 
-  checkAST(lc->root);
+  SemanticResult *semantic_result = analyzeAST(lc->root);
+  freeSemanticResult(semantic_result);
 }
 
 
