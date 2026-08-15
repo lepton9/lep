@@ -20,7 +20,6 @@ void exit_scope(symtabStack* sts);
 bool matchType(const int a, const int b);
 int funcRetType(AST* f); // To be deleted
 TYPE convertType(const int type);
-char* typeToStr(const TYPE type);
 
 int sizeOfType(const TYPE type);
 bool allocMem(symtabStack* sts, stEntry* e, const int size);

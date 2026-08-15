@@ -13,7 +13,7 @@ typedef struct {
 lc *initLC();
 void freeLC(lc *lc);
 
-void readSrcFile(const char *fileName, char **buffer, int *length);
+bool readSrcFile(const char *fileName, char **buffer, int *length);
 void lclex(lc *lc);
 void lcparse(lc *lc);
 void lccompile(lc *lc);

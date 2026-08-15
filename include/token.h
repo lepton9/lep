@@ -72,6 +72,7 @@ typedef struct {
 // } Token;
 
 token *makeToken(const tokenType type, const char *value, const cLoc codeLoc);
+void freeToken(token *tok);
 const char* tokenTypeToStr(tokenType type);
 void printToken(token* token);
 

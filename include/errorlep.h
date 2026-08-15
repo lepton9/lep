@@ -3,7 +3,7 @@
 
 #include "../include/lexer.h"
 #include "../include/parser.h"
-#include "../include/analyzer.h"
+#include "../include/symtab.h"
 
 #define ERR_OUT stderr
 

@@ -8,6 +8,12 @@ token *makeToken(const tokenType type, const char *value, const cLoc codeLoc) {
   return tok;
 }
 
+void freeToken(token *tok) {
+  if (tok == NULL) return;
+  free(tok->value);
+  free(tok);
+}
+
 const char* tokenTypeToStr(tokenType type) {
   switch (type) {
     case T_ARROW:
@@ -88,4 +94,3 @@ const char* tokenTypeToStr(tokenType type) {
 void printToken(token *tok) {
   printf("%-13s %-10s L%-2d C%d\n", tokenTypeToStr(tok->type), tok->value, tok->loc.line, tok->loc.column);
 }
-

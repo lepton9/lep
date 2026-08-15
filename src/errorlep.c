@@ -3,7 +3,9 @@
 
 
 void print_errline(Lexer* l, const cLoc loc) {
-  fprintf(ERR_OUT, "%d: %s\n", loc.line, getLine(l->src, l->srcLen, loc.line));
+  char *line = getLine(l->src, l->srcLen, loc.line);
+  fprintf(ERR_OUT, "%d: %s\n", loc.line, line);
+  free(line);
   fprintf(ERR_OUT, "%*c^\n", loc.column + digits(loc.line) + 1, ' ');
 }
 
@@ -57,4 +59,3 @@ void error_type(const char* msg, const cLoc loc, const TYPE actual, const TYPE e
           , msg, typeToStr(actual), typeToStr(expected), loc.line);
   exit(1);
 }
-

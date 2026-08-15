@@ -290,15 +290,15 @@ AST* parse_block(parser* p) {
 }
 
 AST* parse_statements(parser *p) {
-  // AST *statement = parse_statement(p);
-  AST *statements = initAST(AST_STATEMENT, NULL);
-  AST *cur = statements;
+  AST *statements = NULL;
+  AST *cur = NULL;
   while (p->token->type != T_BRACE_R) {
     AST *next_statement = parse_statement(p);
-    cur->next = next_statement;
+    if (statements == NULL) statements = next_statement;
+    else cur->next = next_statement;
     cur = next_statement;
   }
-  return statements->next;
+  return statements;
 }
 
 AST* parse_statement(parser *p) {
@@ -386,4 +386,3 @@ int digits(int n)
 //   printf("%*c^\n", p->token->loc.column + digits(p->token->loc.line) + 1, ' ');
 //   exit(1);
 // }
-

@@ -60,7 +60,7 @@ int sizeOfType(const TYPE type) {
     case F:
       return 0;
     case VOID:
-      return sizeof(void);
+      return 0;
   }
   return 0;
 }
@@ -211,20 +211,6 @@ void semanticAnalysis(symtabStack* sts, AST* ast) {
 int funcRetType(AST* f) {
   return f->l->l->next->next->tok->type;
 }
-
-char* typeToStr(const TYPE type) {
-  switch (type) {
-    case INT: return strdup("int");
-    case FLOAT: return strdup("float");
-    case CHAR: return strdup("char");
-    case STR: return strdup("str");
-    case BOOL: return strdup("bool");
-    case F: return strdup("f");
-    case VOID: return strdup("void");
-  }
-  return NULL;
-}
-
 
 TYPE convertType(const int type) {
   switch (type) {

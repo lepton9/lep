@@ -74,17 +74,20 @@ void *pop_front(LList *list) {
 }
 
 void *pop_last(LList *list) {
-  void *ret = NULL;
+  if (list->head == NULL) return NULL;
+
   if (list->head->next == NULL) {
-    ret = list->head->data;
+    void *ret = list->head->data;
     free(list->head);
+    list->head = NULL;
+    list->size--;
     return ret;
   }
   node *cur = list->head;
   while (cur->next->next != NULL) {
     cur = cur->next;
   }
-  ret = cur->next->data;
+  void *ret = cur->next->data;
   free(cur->next);
   cur->next = NULL;
   list->size--;

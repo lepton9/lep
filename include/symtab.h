@@ -67,6 +67,8 @@ stEntry* st_lookup(symtab* st, const char* identifier);
 void enter_scope(symtabStack *sts);
 void exit_scope(symtabStack *sts);
 
+const char* typeToStr(const TYPE type);
+
 void print_symtab(FILE* out, const symtab* st);
 void print_stEntry(FILE* out, const stEntry* e);
 

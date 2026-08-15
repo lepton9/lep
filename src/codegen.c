@@ -14,8 +14,8 @@ asmf* initAsmfile(const char* fname) {
 }
 
 void freeAsmfile(asmf* af) {
-  fclose(af->file);
-  free(af->file);
+  if (af == NULL) return;
+  if (af->file != NULL) fclose(af->file);
   free(af->out);
   free(af);
 }
@@ -118,6 +118,5 @@ void compile_func_def(asmf* af, symtabStack* sts, stEntry* f) {
   // exit_stackframe(af);
   // fprintf(af->file, "ret\n");
 }
-
 
 

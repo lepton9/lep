@@ -9,10 +9,10 @@ symtab* initSymbolTable() {
 }
 
 void freeSymbolTable(symtab* st) {
-  for (int i = 0; i < st->size; i++) {
+  for (size_t i = 0; i < st->size; i++) {
     if (st->items[i]) {
       free_stEntry(st->items[i]->value);
-      free(st->items[i]);
+      free_item(st->items[i]);
     }
   }
   free(st->items);
@@ -21,6 +21,7 @@ void freeSymbolTable(symtab* st) {
 
 void free_stEntry(stEntry* entry) {
   free(entry->name);
+  list_clear(entry->usageLines);
   free(entry->usageLines);
   if (entry->f_info) {
     free(entry->f_info->params);
@@ -30,7 +31,7 @@ void free_stEntry(stEntry* entry) {
 }
 
 stEntry* st_insert(symtab* st, const char* key) {
-  stEntry* e = malloc(sizeof(stEntry));
+  stEntry* e = calloc(1, sizeof(stEntry));
   e->name = malloc(strlen(key) + 1);
   strcpy(e->name, key);
   e->usageLines = create_list();
@@ -58,9 +59,22 @@ void exit_scope(symtabStack* sts) {
   // if (sts->cur_scope == 0) return;
   assert(sts->cur_scope > 0);
   symtab* st = pop_front(sts->s);
-  pop_front(sts->memOffsets);
+  free(pop_front(sts->memOffsets));
   freeSymbolTable(st);
   sts->cur_scope--;
+}
+
+const char* typeToStr(const TYPE type) {
+  switch (type) {
+    case INT: return "int";
+    case FLOAT: return "float";
+    case CHAR: return "char";
+    case STR: return "str";
+    case BOOL: return "bool";
+    case F: return "f";
+    case VOID: return "void";
+  }
+  return NULL;
 }
 
 void print_symtab(FILE* out, const symtab* st) {
@@ -72,14 +86,13 @@ void print_symtab(FILE* out, const symtab* st) {
 }
 
 void print_stEntry(FILE* out, const stEntry* e) {
-  fprintf(out, "%d:%s | decl: %d | memOffset: %d", e->type, e->name, e->declLine, e->address);
+  fprintf(out, "%s:%s | decl: %d | memOffset: %d", typeToStr(e->type), e->name, e->declLine, e->address);
   if (e->f_info) {
-    fprintf(out, " | ret: %d args: ( ", e->f_info->ret_type);
+    fprintf(out, " | ret: %s args: ( ", typeToStr(e->f_info->ret_type));
     for (int i = 0; i < e->f_info->n_params; i++) {
-      fprintf(out, "%d ", e->f_info->params[i].type);
+      fprintf(out, "%s ", typeToStr(e->f_info->params[i].type));
     }
     fprintf(out, ")");
   }
   fprintf(out, "\n");
 }
-
