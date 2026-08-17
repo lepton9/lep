@@ -50,21 +50,43 @@ static operand none_operand(void) {
 }
 
 static operand value_operand(const char *name, unsigned version, TYPE type) {
-  return (operand){.kind = SSA_OPERAND_VALUE, .type = type, .name = duplicate_string(name), .version = version};
+  return (operand){
+      .kind = SSA_OPERAND_VALUE,
+      .type = type,
+      .data.value = {.name = duplicate_string(name), .version = version},
+  };
 }
 
 static operand int_operand(long value) {
-  return (operand){.kind = SSA_OPERAND_INT, .type = INT, .int_value = value};
+  return (operand){.kind = SSA_OPERAND_INT, .type = INT, .data.int_value = value};
+}
+
+static operand float_operand(double value) {
+  return (operand){.kind = SSA_OPERAND_FLOAT, .type = FLOAT, .data.float_value = value};
+}
+
+static operand bool_operand(bool value) {
+  return (operand){.kind = SSA_OPERAND_BOOL, .type = BOOL, .data.bool_value = value};
+}
+
+static operand char_operand(unsigned char value) {
+  return (operand){.kind = SSA_OPERAND_CHAR, .type = CHAR, .data.char_value = value};
+}
+
+static operand string_operand(const char *value) {
+  return (operand){.kind = SSA_OPERAND_STRING, .type = STR, .data.string_value = duplicate_string(value)};
 }
 
 static operand copy_operand(operand source) {
   operand copy = source;
-  if (source.kind == SSA_OPERAND_VALUE) copy.name = duplicate_string(source.name);
+  if (source.kind == SSA_OPERAND_VALUE) copy.data.value.name = duplicate_string(source.data.value.name);
+  if (source.kind == SSA_OPERAND_STRING) copy.data.string_value = duplicate_string(source.data.string_value);
   return copy;
 }
 
 static void free_operand(operand operand_value) {
-  if (operand_value.kind == SSA_OPERAND_VALUE) free(operand_value.name);
+  if (operand_value.kind == SSA_OPERAND_VALUE) free(operand_value.data.value.name);
+  if (operand_value.kind == SSA_OPERAND_STRING) free(operand_value.data.string_value);
 }
 
 char *var_name(const char *name, unsigned version) {
@@ -84,9 +106,9 @@ static instruction *append_instruction(builder *build, opcode op, operand dest,
                                        operand src1, operand src2) {
   instruction *instruction_value = calloc(1, sizeof(*instruction_value));
   instruction_value->op = op;
-  instruction_value->dest = dest;
-  instruction_value->src1 = src1;
-  instruction_value->src2 = src2;
+  instruction_value->dest = copy_operand(dest);
+  instruction_value->src1 = copy_operand(src1);
+  instruction_value->src2 = copy_operand(src2);
   if (build->block->last) build->block->last->next = instruction_value;
   else build->block->first = instruction_value;
   build->block->last = instruction_value;
@@ -132,15 +154,33 @@ static TYPE ast_type(const AST *type_node) {
   return type_node && type_node->tok ? convertType(type_node->tok->type) : VOID;
 }
 
+static bool is_value_type(TYPE type) {
+  return type == INT || type == FLOAT || type == CHAR || type == BOOL || type == STR;
+}
+
+static operand literal_operand(builder *build, AST *expression) {
+  switch (expression->tok->type) {
+    case T_LIT_INT:
+      return int_operand(strtol(expression->tok->value, NULL, 10));
+    case T_LIT_FLOAT:
+      return float_operand(strtod(expression->tok->value, NULL));
+    case T_LIT_BOOL:
+      return bool_operand(strcmp(expression->tok->value, "true") == 0);
+    case T_LIT_CHAR:
+      return char_operand((unsigned char)expression->tok->value[1]);
+    case T_LIT_STR:
+      return string_operand(expression->tok->value);
+    default:
+      set_error(build->ir, "unsupported literal in SSA generation");
+      return none_operand();
+  }
+}
+
 static operand emit_expression(builder *build, AST *expression, const operand *target) {
   if (!expression || !build->ir->valid) return none_operand();
 
   if (expression->type == AST_VALUE) {
-    if (expression->tok->type != T_LIT_INT) {
-      set_error(build->ir, "SSA currently supports integer literals only");
-      return none_operand();
-    }
-    return int_operand(strtol(expression->tok->value, NULL, 10));
+    return literal_operand(build, expression);
   }
 
   if (expression->type == AST_ID) {
@@ -154,15 +194,6 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 
   if (expression->type == AST_OPERATOR) {
     opcode operation;
-    switch (expression->tok->type) {
-      case T_PLUS: operation = OP_ADD; break;
-      case T_MINUS: operation = OP_SUB; break;
-      case T_ASTERISK: operation = OP_MUL; break;
-      case T_SLASH: operation = OP_DIV; break;
-      default:
-        set_error(build->ir, "unsupported expression operator '%s'", expression->tok->value);
-        return none_operand();
-    }
     operand lhs = emit_expression(build, expression->l, NULL);
     operand rhs = emit_expression(build, expression->r, NULL);
     if (!build->ir->valid) {
@@ -170,15 +201,24 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
       free_operand(rhs);
       return none_operand();
     }
-    if (lhs.type != INT || rhs.type != INT) {
-      set_error(build->ir, "SSA arithmetic currently supports int operands only");
+    if (lhs.type != rhs.type || (lhs.type != INT && lhs.type != FLOAT)) {
+      set_error(build->ir, "arithmetic requires two int or two float operands");
       free_operand(lhs);
       free_operand(rhs);
       return none_operand();
     }
+    switch (expression->tok->type) {
+      case T_PLUS: operation = lhs.type == FLOAT ? OP_FADD : OP_ADD; break;
+      case T_MINUS: operation = lhs.type == FLOAT ? OP_FSUB : OP_SUB; break;
+      case T_ASTERISK: operation = lhs.type == FLOAT ? OP_FMUL : OP_MUL; break;
+      case T_SLASH: operation = lhs.type == FLOAT ? OP_FDIV : OP_DIV; break;
+      default: return none_operand();
+    }
     operand result = target ? copy_operand(*target) :
-        value_operand("tmp", next_version(build, "tmp"), INT);
-    append_instruction(build, operation, copy_operand(result), lhs, rhs);
+        value_operand("tmp", next_version(build, "tmp"), lhs.type);
+    append_instruction(build, operation, result, lhs, rhs);
+    free_operand(lhs);
+    free_operand(rhs);
     return result;
   }
 
@@ -191,8 +231,8 @@ static void emit_assignment(builder *build, AST *assignment, TYPE declared_type)
   binding *previous = lookup_binding(build, name);
   TYPE type = declared_type;
   if (type == VOID && previous) type = previous->value.type;
-  if (type != INT) {
-    set_error(build->ir, "SSA currently supports int variables only ('%s')", name);
+  if (!is_value_type(type)) {
+    set_error(build->ir, "SSA cannot assign values to '%s' of type %s", name, typeToStr(type));
     return;
   }
 
@@ -203,9 +243,16 @@ static void emit_assignment(builder *build, AST *assignment, TYPE declared_type)
     free_operand(result);
     return;
   }
+  if (result.type != type) {
+    set_error(build->ir, "assignment to '%s' has incompatible SSA types", name);
+    free_operand(destination);
+    free_operand(result);
+    return;
+  }
   if (result.kind != SSA_OPERAND_VALUE ||
-      strcmp(result.name, destination.name) != 0 || result.version != destination.version) {
-    append_instruction(build, OP_COPY, copy_operand(destination), result, none_operand());
+      strcmp(result.data.value.name, destination.data.value.name) != 0 ||
+      result.data.value.version != destination.data.value.version) {
+    append_instruction(build, OP_COPY, destination, result, none_operand());
   }
   bind_value(build, name, destination);
   free_operand(destination);
@@ -228,6 +275,7 @@ static void emit_statement(builder *build, AST *statement) {
     case AST_RET: {
       operand result = statement->l ? emit_expression(build, statement->l, NULL) : none_operand();
       if (build->ir->valid) append_instruction(build, OP_RET, none_operand(), result, none_operand());
+      free_operand(result);
       break;
     }
     case AST_BLOCK:
@@ -261,8 +309,9 @@ static function *emit_function(ssa *ir, AST *ast) {
   function_value->blocks = build.block;
 
   for (AST *parameter = params_node->l; parameter; parameter = parameter->next) {
-    if (ast_type(parameter->l) != INT) {
-      set_error(ir, "SSA currently supports int parameters only");
+    TYPE parameter_type = ast_type(parameter->l);
+    if (!is_value_type(parameter_type)) {
+      set_error(ir, "SSA parameters must have a value type");
       break;
     }
     size_t index = function_value->param_count++;
@@ -270,7 +319,7 @@ static function *emit_function(ssa *ir, AST *ast) {
                                      function_value->param_count * sizeof(*function_value->params));
     const char *parameter_name = parameter->r->tok->value;
     function_value->params[index] = value_operand(parameter_name,
-                                                   next_version(&build, parameter_name), INT);
+                                                   next_version(&build, parameter_name), parameter_type);
     bind_value(&build, parameter_name, function_value->params[index]);
   }
   emit_statement_list(&build, ast->r->l);
@@ -297,8 +346,8 @@ static global_var *emit_global(ssa *ir, AST *ast) {
   AST *identifier = ast->r;
 
   if (identifier->type == AST_ASSIGNMENT) identifier = identifier->l;
-  if (type != INT) {
-    set_error(ir, "SSA currently supports int global variables only");
+  if (!is_value_type(type)) {
+    set_error(ir, "SSA globals must have a value type");
     return global;
   }
   global->name = duplicate_string(identifier->tok->value);
@@ -306,12 +355,17 @@ static global_var *emit_global(ssa *ir, AST *ast) {
   if (ast->r->type != AST_ASSIGNMENT) return global;
 
   AST *initializer = ast->r->r;
-  if (initializer->type != AST_VALUE || initializer->tok->type != T_LIT_INT) {
-    set_error(ir, "global '%s' requires an integer literal initializer", global->name);
+  if (initializer->type != AST_VALUE) {
+    set_error(ir, "global '%s' requires a literal initializer", global->name);
+    return global;
+  }
+  builder build = {.ir = ir};
+  global->initializer = literal_operand(&build, initializer);
+  if (!ir->valid || global->initializer.type != type) {
+    if (ir->valid) set_error(ir, "global '%s' has an incompatible initializer", global->name);
     return global;
   }
   global->has_initializer = true;
-  global->initializer = int_operand(strtol(initializer->tok->value, NULL, 10));
   return global;
 }
 
@@ -350,6 +404,10 @@ static const char *opcode_name(opcode op) {
     case OP_SUB: return "sub";
     case OP_MUL: return "mul";
     case OP_DIV: return "sdiv";
+    case OP_FADD: return "fadd";
+    case OP_FSUB: return "fsub";
+    case OP_FMUL: return "fmul";
+    case OP_FDIV: return "fdiv";
     case OP_CALL: return "call";
     case OP_RET: return "ret";
     case OP_PHI: return "phi";
@@ -360,8 +418,14 @@ static const char *opcode_name(opcode op) {
 static void print_operand(FILE *out, operand operand_value) {
   switch (operand_value.kind) {
     case SSA_OPERAND_NONE: fputs("void", out); break;
-    case SSA_OPERAND_VALUE: fprintf(out, "%%%s.%u", operand_value.name, operand_value.version); break;
-    case SSA_OPERAND_INT: fprintf(out, "%ld", operand_value.int_value); break;
+    case SSA_OPERAND_VALUE:
+      fprintf(out, "%%%s.%u", operand_value.data.value.name, operand_value.data.value.version);
+      break;
+    case SSA_OPERAND_INT: fprintf(out, "%ld", operand_value.data.int_value); break;
+    case SSA_OPERAND_FLOAT: fprintf(out, "%g", operand_value.data.float_value); break;
+    case SSA_OPERAND_BOOL: fputs(operand_value.data.bool_value ? "true" : "false", out); break;
+    case SSA_OPERAND_CHAR: fprintf(out, "'%c'", operand_value.data.char_value); break;
+    case SSA_OPERAND_STRING: fputs(operand_value.data.string_value, out); break;
   }
 }
 

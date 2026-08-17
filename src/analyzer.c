@@ -137,7 +137,11 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
       if (lookup_all(sts, id->tok->value)) {
         error_redef(id->tok->value, convertType(ast->l->tok->type), id->tok->loc);
       }
-      stEntry* var = newVariable(sts, id->tok->value, convertType(ast->l->tok->type));
+      TYPE variable_type = convertType(ast->l->tok->type);
+      if (variable_type == VOID || variable_type == F) {
+        error_semantic("Variables cannot have type void or f", id->tok->loc);
+      }
+      stEntry* var = newVariable(sts, id->tok->value, variable_type);
       var->declLine = id->tok->loc.line;
 
       if (analyzer->current_function != NULL) {
@@ -283,8 +287,14 @@ int typecheck_operator(symtabStack* sts, AST* lhs, AST* rhs) {
   int lt = expr_type(sts, lhs);
   int rt = expr_type(sts, rhs);
 
-  if (matchType(lt, rt)) return lt;
-  else return -1;
+  if (!matchType(lt, rt)) {
+    error_type("Operator operands must have the same type", lhs->tok->loc, rt, lt);
+  }
+  TYPE type = convertType(lt);
+  if (type != INT && type != FLOAT) {
+    error_semantic("Arithmetic operators require int or float operands", lhs->tok->loc);
+  }
+  return type;
 }
 
 SemanticResult* analyzeAST(AST* root) {

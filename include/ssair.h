@@ -13,6 +13,10 @@ typedef enum {
   OP_SUB,
   OP_MUL,
   OP_DIV,
+  OP_FADD,
+  OP_FSUB,
+  OP_FMUL,
+  OP_FDIV,
   OP_CALL,
   OP_RET,
   OP_PHI
@@ -21,15 +25,27 @@ typedef enum {
 typedef enum {
   SSA_OPERAND_NONE,
   SSA_OPERAND_VALUE,
-  SSA_OPERAND_INT
+  SSA_OPERAND_INT,
+  SSA_OPERAND_FLOAT,
+  SSA_OPERAND_BOOL,
+  SSA_OPERAND_CHAR,
+  SSA_OPERAND_STRING
 } operand_type;
 
 typedef struct {
   operand_type kind;
   TYPE type;
-  char *name;
-  unsigned version;
-  long int_value;
+  union {
+    struct {
+      char *name;
+      unsigned version;
+    } value;
+    long int_value;
+    double float_value;
+    bool bool_value;
+    unsigned char char_value;
+    char *string_value;
+  } data;
 } operand;
 
 typedef struct instruction {
