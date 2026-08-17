@@ -1,5 +1,6 @@
 #include "../include/lc.h"
 #include "../include/analyzer.h"
+#include "../include/ssair.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -28,6 +29,10 @@ void lccompile(lc *lc) {
 
   SemanticResult *semantic_result = analyzeAST(lc->root);
   freeSemanticResult(semantic_result);
+
+  ssa *ir = generate_ssair(lc->root);
+  print_ssair(stdout, ir);
+  free_ssair(ir);
 }
 
 

@@ -1,37 +1,35 @@
 #ifndef SSAIR_H
 #define SSAIR_H
 
-#include "../include/ast.h"
-#include "../include/symtab.h"
+#include <stdbool.h>
+#include <stdio.h>
+
+#include "ast.h"
+#include "symtab.h"
 
 typedef enum {
+  OP_COPY,
   OP_ADD,
   OP_SUB,
   OP_MUL,
   OP_DIV,
-  OP_LOAD,
-  OP_STORE,
-  OP_PHI,
-  OP_RET
+  OP_CALL,
+  OP_RET,
+  OP_PHI
 } opcode;
 
-typedef struct {
-  char* name;
-  int version;
-} var;
-
 typedef enum {
-  SSA_VAR,
-  SSA_CONST
+  SSA_OPERAND_NONE,
+  SSA_OPERAND_VALUE,
+  SSA_OPERAND_INT
 } operand_type;
 
-typedef struct operand {
-  operand_type op_type;
+typedef struct {
+  operand_type kind;
   TYPE type;
-  union {
-    var var;
-    void* constant;
-  } value;
+  char *name;
+  unsigned version;
+  long int_value;
 } operand;
 
 typedef struct instruction {
@@ -39,22 +37,36 @@ typedef struct instruction {
   operand dest;
   operand src1;
   operand src2;
-  struct instruction* next;
+  operand *args;
+  size_t arg_count;
+  struct instruction *next;
 } instruction;
 
 typedef struct basic_block {
-  int block_id;
-  instruction* instructions;
-  // struct basic_block** successors;
-  // struct basic_block** predecessors;
-  struct basic_block* next;
+  unsigned id;
+  instruction *first;
+  instruction *last;
+  struct basic_block **successors;
+  size_t successor_count;
+  struct basic_block **predecessors;
+  size_t predecessor_count;
+  struct basic_block *next;
 } basic_block;
 
 typedef struct {
-  char* name;
-  var** params;
-  int param_n;
-  basic_block* entry_block;
+  char *name;
+  TYPE type;
+  bool has_initializer;
+  operand initializer;
+} global_var;
+
+typedef struct {
+  char *name;
+  TYPE return_type;
+  operand *params;
+  size_t param_count;
+  basic_block *entry_block;
+  basic_block *blocks;
 } function;
 
 typedef enum {
@@ -65,28 +77,24 @@ typedef enum {
 typedef struct ssa_node {
   node_type type;
   union {
-    function* f;
-    instruction* i;
+    global_var *global;
+    function *function;
   } value;
-  struct ssa_node* next;
+  struct ssa_node *next;
 } ssa_node;
 
 typedef struct {
-  ssa_node* entry;
+  ssa_node *entry;
+  ssa_node *last;
+  bool valid;
+  char *error;
 } ssa;
 
-ssa* generate_ssair(AST* root);
+ssa *generate_ssair(AST *root);
+void print_ssair(FILE *out, const ssa *ir);
+void free_ssair(ssa *ir);
 
-char* var_name(const char* name, const int version); // x, 1 -> x_1
-
-ssa* init_ssa();
-function* create_function(const char* name, const int param_n);
-instruction* create_instruction(opcode op, char* dest, char* src1, char* src2);
-basic_block* create_block(int id);
-
-ssa_node* addSSA_func(ssa* ssa, symtabStack* sts, AST* ast);
-ssa_node* addSSA_var_g(ssa* ssa, symtabStack* sts, AST* ast);
-ssa_node* addSSA_assign_g(ssa* ssa, symtabStack* sts, AST* ast);
+/* Returns an owned SSA identifier. */
+char *var_name(const char *name, unsigned version);
 
 #endif
-

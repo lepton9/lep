@@ -5,14 +5,18 @@ INC := -I ./include
 FLAGS := -c $(INC)
 LINK := 
 CC := gcc
+SAN_FLAGS := -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-pointer
 
 TESTS := ./tests
 TEST_TARGETS := 
 
-OBJ := lexer parser LList token ast hashtab symtab analyzer errorlep codegen regalloc
+OBJ := lexer parser LList token ast hashtab symtab analyzer errorlep ssair
 
 lc: $(addprefix $(OBJS)/,$(addsuffix .o,$(OBJ))) | $(BIN)
 	$(CC) $^ $(SRC)/lc.c -o $(BIN)/$@ $(LINK)
+
+asan: | $(BIN)
+	$(CC) $(SAN_FLAGS) $(INC) $(addprefix $(SRC)/,$(addsuffix .c,$(OBJ))) $(SRC)/lc.c -o $(BIN)/lc-asan $(LINK)
 
 $(OBJS)/%.o: $(SRC)/%.c | $(OBJS)
 	$(CC) $(FLAGS) $< -o $@
@@ -24,7 +28,7 @@ $(BIN):
 	mkdir $(BIN)
 
 debug:
-	$(CC) $(INC) $(SRC)/*.c -pthread -g -o $(BIN)/db $(LINK)
+	$(CC) $(INC) $(addprefix $(SRC)/,$(addsuffix .c,$(OBJ))) $(SRC)/lc.c -pthread -g -o $(BIN)/db $(LINK)
 	gdb -tui $(BIN)/db
 
 
@@ -45,4 +49,3 @@ clean:
 
 run:
 	$(BIN)/lc parseTest.lep
-
