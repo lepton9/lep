@@ -28,7 +28,5 @@ void* ht_get(hashtab* ht, const char* key);
 ht_e* ht_lookup(hashtab* ht, const char* key);
 ht_e* ht_insert(hashtab* ht, const char* key, void* value);
 bool ht_delete(hashtab* ht, const char* key);
-static uint64_t hash(const char* key);
-static bool ht_expand(hashtab* ht);
 
 #endif

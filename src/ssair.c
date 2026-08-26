@@ -21,6 +21,7 @@ typedef struct {
   ssa *ir;
   function *function;
   basic_block *block;
+  // TODO: use hashmap
   binding *bindings;
   version_counter *versions;
   const SemanticResult *semantic;
@@ -35,16 +36,23 @@ static char *duplicate_string(const char *source) {
   return copy;
 }
 
-static void set_error(ssa *ir, const char *format, ...) {
+static const token *source_token(const AST *node) {
+  if (!node) return NULL;
+  if (node->tok) return node->tok;
+  const token *left = source_token(node->l);
+  return left ? left : source_token(node->r);
+}
+
+static void set_error(ssa *ir, const AST *node, const char *format, ...) {
   va_list args;
-  char buffer[256];
 
   if (!ir->valid) return;
   va_start(args, format);
-  vsnprintf(buffer, sizeof(buffer), format, args);
-  va_end(args);
   ir->valid = false;
-  ir->error = duplicate_string(buffer);
+  const token *source = source_token(node);
+  add_diagnosticv(ir->diagnostics, DIAGNOSTIC_ERROR, "ssa",
+                  source ? &source->loc : NULL, format, args);
+  va_end(args);
 }
 
 static operand none_operand(void) {
@@ -197,7 +205,7 @@ static operand literal_operand(builder *build, AST *expression) {
     case T_LIT_STR:
       return string_operand(expression->tok->value);
     default:
-      set_error(build->ir, "unsupported literal in SSA generation");
+      set_error(build->ir, expression, "unsupported literal in SSA generation");
       return none_operand();
   }
 }
@@ -209,12 +217,12 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
   const char *callee = call->l->tok->value;
   stEntry *function_value = lookup_function(build, callee);
   if (!function_value || !function_value->f_info) {
-    set_error(build->ir, "no SSA function signature is available for '%s'", callee);
+    set_error(build->ir, call->l, "no SSA function signature is available for '%s'", callee);
     return none_operand();
   }
   func_info *signature = function_value->f_info;
   if (signature->ret_type == VOID && target) {
-    set_error(build->ir, "void function '%s' cannot be used as an expression", callee);
+    set_error(build->ir, call->l, "void function '%s' cannot be used as an expression", callee);
     return none_operand();
   }
 
@@ -226,12 +234,12 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
     if (build->ir->valid &&
         (arg_count >= signature->n_params ||
          args[arg_count].type != signature->params[arg_count].type)) {
-      set_error(build->ir, "call to '%s' has an incompatible argument", callee);
+      set_error(build->ir, argument, "call to '%s' has an incompatible argument", callee);
     }
     arg_count++;
   }
   if (build->ir->valid && arg_count != signature->n_params) {
-    set_error(build->ir, "call to '%s' has the wrong number of arguments", callee);
+    set_error(build->ir, call->l, "call to '%s' has the wrong number of arguments", callee);
   }
   if (!build->ir->valid) {
     for (size_t index = 0; index < arg_count; index++) free_operand(args[index]);
@@ -262,7 +270,7 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
   if (expression->type == AST_ID) {
     binding *binding_value = lookup_binding(build, expression->tok->value);
     if (!binding_value) {
-      set_error(build->ir, "no SSA value is available for '%s'", expression->tok->value);
+      set_error(build->ir, expression, "no SSA value is available for '%s'", expression->tok->value);
       return none_operand();
     }
     return copy_operand(binding_value->value);
@@ -280,7 +288,7 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
       return none_operand();
     }
     if (lhs.type != rhs.type || (lhs.type != INT && lhs.type != FLOAT)) {
-      set_error(build->ir, "arithmetic requires two int or two float operands");
+      set_error(build->ir, expression, "arithmetic requires two int or two float operands");
       free_operand(lhs);
       free_operand(rhs);
       return none_operand();
@@ -290,7 +298,11 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
       case T_MINUS: operation = lhs.type == FLOAT ? OP_FSUB : OP_SUB; break;
       case T_ASTERISK: operation = lhs.type == FLOAT ? OP_FMUL : OP_MUL; break;
       case T_SLASH: operation = lhs.type == FLOAT ? OP_FDIV : OP_DIV; break;
-      default: return none_operand();
+      default:
+        set_error(build->ir, expression, "unsupported arithmetic operator in SSA generation");
+        free_operand(lhs);
+        free_operand(rhs);
+        return none_operand();
     }
     operand result = target ? copy_operand(*target) :
         value_operand("tmp", next_version(build, "tmp"), lhs.type);
@@ -300,7 +312,7 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
     return result;
   }
 
-  set_error(build->ir, "unsupported expression in SSA generation");
+  set_error(build->ir, expression, "unsupported expression in SSA generation");
   return none_operand();
 }
 
@@ -311,7 +323,7 @@ static void emit_assignment(builder *build, AST *assignment, TYPE declared_type)
   TYPE type = declared_type;
   if (type == VOID && previous) type = previous->value.type;
   if (!is_value_type(type)) {
-    set_error(build->ir, "SSA cannot assign values to '%s' of type %s", name, typeToStr(type));
+    set_error(build->ir, assignment->l, "SSA cannot assign values to '%s' of type %s", name, typeToStr(type));
     return;
   }
 
@@ -323,7 +335,7 @@ static void emit_assignment(builder *build, AST *assignment, TYPE declared_type)
     return;
   }
   if (result.type != type) {
-    set_error(build->ir, "assignment to '%s' has incompatible SSA types", name);
+    set_error(build->ir, assignment->l, "assignment to '%s' has incompatible SSA types", name);
     free_operand(destination);
     free_operand(result);
     return;
@@ -343,7 +355,7 @@ static void emit_statement_list(builder *build, AST *statement);
 static void emit_statement(builder *build, AST *statement) {
   if (!statement || !build->ir->valid) return;
   if (build->terminated) {
-    set_error(build->ir, "instruction follows a return in function '%s'", build->function->name);
+    set_error(build->ir, statement, "instruction follows a return in function '%s'", build->function->name);
     return;
   }
   switch (statement->type) {
@@ -358,7 +370,7 @@ static void emit_statement(builder *build, AST *statement) {
     case AST_RET: {
       operand result = statement->l ? emit_expression(build, statement->l, NULL) : none_operand();
       if (build->ir->valid && result.type != build->function->return_type) {
-        set_error(build->ir, "return value has an incompatible type in function '%s'", build->function->name);
+        set_error(build->ir, statement, "return value has an incompatible type in function '%s'", build->function->name);
       }
       if (build->ir->valid) {
         append_instruction(build, OP_RET, none_operand(), result, none_operand());
@@ -377,7 +389,7 @@ static void emit_statement(builder *build, AST *statement) {
       emit_statement_list(build, statement->l);
       break;
     default:
-      set_error(build->ir, "unsupported statement in SSA generation");
+      set_error(build->ir, statement, "unsupported statement in SSA generation");
       break;
   }
 }
@@ -399,7 +411,7 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
   function_value->name = duplicate_string(name_node->tok->value);
   stEntry *function_symbol = lookup_function(&build, function_value->name);
   if (!function_symbol || !function_symbol->f_info) {
-    set_error(ir, "no semantic function signature is available for '%s'", function_value->name);
+    set_error(ir, name_node, "no semantic function signature is available for '%s'", function_value->name);
     return function_value;
   }
   function_value->return_type = function_symbol->f_info->ret_type;
@@ -409,12 +421,12 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
 
   for (AST *parameter = params_node->l; parameter; parameter = parameter->next) {
     if (function_value->param_count >= function_symbol->f_info->n_params) {
-      set_error(ir, "semantic parameter count does not match function '%s'", function_value->name);
+      set_error(ir, parameter, "semantic parameter count does not match function '%s'", function_value->name);
       break;
     }
     TYPE parameter_type = function_symbol->f_info->params[function_value->param_count].type;
     if (!is_value_type(parameter_type)) {
-      set_error(ir, "SSA parameters must have a value type");
+      set_error(ir, parameter, "SSA parameters must have a value type");
       break;
     }
     size_t index = function_value->param_count++;
@@ -426,14 +438,14 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
     bind_value(&build, parameter_name, function_value->params[index]);
   }
   if (ir->valid && function_value->param_count != function_symbol->f_info->n_params) {
-    set_error(ir, "semantic parameter count does not match function '%s'", function_value->name);
+    set_error(ir, name_node, "semantic parameter count does not match function '%s'", function_value->name);
   }
   emit_statement_list(&build, ast->r->l);
   if (ir->valid && !build.terminated) {
     if (function_value->return_type == VOID) {
       append_instruction(&build, OP_RET, none_operand(), none_operand(), none_operand());
     } else {
-      set_error(ir, "function '%s' has no return instruction", function_value->name);
+      set_error(ir, name_node, "function '%s' has no return instruction", function_value->name);
     }
   }
 
@@ -460,7 +472,7 @@ static global_var *emit_global(ssa *ir, AST *ast) {
 
   if (identifier->type == AST_ASSIGNMENT) identifier = identifier->l;
   if (!is_value_type(type)) {
-    set_error(ir, "SSA globals must have a value type");
+    set_error(ir, identifier, "SSA globals must have a value type");
     return global;
   }
   global->name = duplicate_string(identifier->tok->value);
@@ -469,13 +481,13 @@ static global_var *emit_global(ssa *ir, AST *ast) {
 
   AST *initializer = ast->r->r;
   if (initializer->type != AST_VALUE) {
-    set_error(ir, "global '%s' requires a literal initializer", global->name);
+    set_error(ir, initializer, "global '%s' requires a literal initializer", global->name);
     return global;
   }
   builder build = {.ir = ir};
   global->initializer = literal_operand(&build, initializer);
   if (!ir->valid || global->initializer.type != type) {
-    if (ir->valid) set_error(ir, "global '%s' has an incompatible initializer", global->name);
+    if (ir->valid) set_error(ir, initializer, "global '%s' has an incompatible initializer", global->name);
     return global;
   }
   global->has_initializer = true;
@@ -483,11 +495,12 @@ static global_var *emit_global(ssa *ir, AST *ast) {
 }
 
 // Generates a complete module.
-ssa *generate_ssair(AST *root, const SemanticResult *semantic) {
+ssa *generate_ssair(AST *root, const SemanticResult *semantic, DiagnosticList *diagnostics) {
   ssa *ir = calloc(1, sizeof(*ir));
   ir->valid = true;
+  ir->diagnostics = diagnostics;
   if (!root || root->type != AST_PROGRAM || !semantic || !semantic->symbols) {
-    set_error(ir, "SSA generation requires a program AST and semantic result");
+    set_error(ir, root, "SSA generation requires a program AST and semantic result");
     return ir;
   }
 
@@ -501,7 +514,7 @@ ssa *generate_ssair(AST *root, const SemanticResult *semantic) {
       module_node->value.global = emit_global(ir, node);
     } else {
       free(module_node);
-      set_error(ir, "unsupported top-level declaration in SSA generation");
+      set_error(ir, node, "unsupported top-level declaration in SSA generation");
       break;
     }
     if (ir->last) ir->last->next = module_node;
@@ -544,11 +557,7 @@ static void print_operand(FILE *out, operand operand_value) {
 }
 
 void print_ssair(FILE *out, const ssa *ir) {
-  if (!ir) return;
-  if (!ir->valid) {
-    fprintf(out, "SSA error: %s\n", ir->error ? ir->error : "unknown error");
-    return;
-  }
+  if (!ir || !ir->valid) return;
   for (const ssa_node *node = ir->entry; node; node = node->next) {
     if (node->type == GLOBAL_VAR) {
       const global_var *global = node->value.global;
@@ -654,6 +663,5 @@ void free_ssair(ssa *ir) {
     free(node);
     node = next_node;
   }
-  free(ir->error);
   free(ir);
 }

@@ -1,5 +1,6 @@
 #include "../include/ast.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 AST *initAST(int type, token *t) {
   AST *ast = malloc(sizeof(AST));
@@ -110,4 +111,3 @@ void print_ast(AST* node, int indent) {
   print_ast(node->r, indent + 1);
   print_ast(node->next, indent);
 }
-

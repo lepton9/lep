@@ -10,7 +10,7 @@ SAN_FLAGS := -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-point
 TESTS := ./tests
 TEST_TARGETS := 
 
-OBJ := lexer parser LList token ast hashtab symtab analyzer errorlep ssair
+OBJ := array_list diagnostic lexer parser LList token ast hashtab symtab analyzer ssair
 
 lc: $(addprefix $(OBJS)/,$(addsuffix .o,$(OBJ))) | $(BIN)
 	$(CC) $^ $(SRC)/lc.c -o $(BIN)/$@ $(LINK)

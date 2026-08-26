@@ -22,6 +22,8 @@ const char* tokenTypeToStr(tokenType type) {
       return "T_SPACE";
     case T_NEWLINE:
       return "T_NEWLINE";
+    case T_OPERATOR:
+      return "T_OPERATOR";
     case T_COLON:
       return "T_COLON";
     case T_SEMICOLON:

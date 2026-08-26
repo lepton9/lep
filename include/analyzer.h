@@ -4,17 +4,20 @@
 #include "../include/ast.h"
 #include "../include/symtab.h"
 #include "../include/stack.h"
+#include "../include/diagnostic.h"
 
 typedef struct {
   char* func_name;
   TYPE ret_type;
   bool returned;
   int ret_scope;
+  cLoc declaration_location;
 } context;
 
 typedef struct {
   symtabStack* symbols;
   context* current_function;
+  DiagnosticList *diagnostics;
 } SemanticAnalyzer;
 
 typedef struct {
@@ -34,16 +37,15 @@ stEntry* newVariable(symtabStack* sts, const char* id, const TYPE type);
 stEntry* lookup_all(symtabStack* sts, const char* key);
 stEntry* lookup_scope(symtab* st, const char* key);
 
-SemanticResult* analyzeAST(AST* root);
+SemanticResult* analyzeAST(AST* root, DiagnosticList *diagnostics);
 void freeSemanticResult(SemanticResult* result);
 void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast);
 
-TYPE expr_type(symtabStack* sts, AST* expr);
+TYPE expr_type(SemanticAnalyzer *analyzer, AST* expr);
 
-bool typecheck_fcall(symtabStack* sts, AST* fcall);
-bool typecheck_assignment(symtabStack* sts, AST* lhs, AST* rhs);
-int typecheck_operator(symtabStack* sts, AST* lhs, AST* rhs);
-bool typecheck_expr(symtabStack* sts, AST* ast);
+bool typecheck_fcall(SemanticAnalyzer *analyzer, AST* fcall);
+bool typecheck_assignment(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs);
+int typecheck_operator(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs);
 
 
 #endif

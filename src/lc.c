@@ -7,7 +7,8 @@
 
 lc* initLC() {
   lc* lepC = malloc(sizeof(lc));
-  lepC->lexer = initLexer();
+  init_diagnostics(&lepC->diagnostics);
+  lepC->lexer = initLexer(&lepC->diagnostics);
   lepC->parser = initParser(lepC->lexer);
   lepC->root = NULL;
   return lepC;
@@ -17,22 +18,29 @@ void freeLC(lc *lc) {
   freeAST(lc->root);
   freeParser(lc->parser);
   freeLexer(lc->lexer);
+  free_diagnostics(&lc->diagnostics);
   free(lc);
 }
 
-void lccompile(lc *lc) {
+bool lccompile(lc *lc) {
   lex(lc->lexer);
-  if (lc->lexer->errors->size != 0) {
-    return;
+  if (lc->diagnostics.error_count) {
+    return false;
   }
   lc->root = parse(lc->parser);
+  if (lc->diagnostics.error_count) return false;
 
-  SemanticResult *semantic_result = analyzeAST(lc->root);
+  SemanticResult *semantic_result = analyzeAST(lc->root, &lc->diagnostics);
+  if (lc->diagnostics.error_count) {
+    freeSemanticResult(semantic_result);
+    return false;
+  }
 
-  ssa *ir = generate_ssair(lc->root, semantic_result);
-  print_ssair(stdout, ir);
+  ssa *ir = generate_ssair(lc->root, semantic_result, &lc->diagnostics);
+  if (ir->valid) print_ssair(stdout, ir);
   free_ssair(ir);
   freeSemanticResult(semantic_result);
+  return lc->diagnostics.error_count == 0;
 }
 
 
@@ -82,21 +90,16 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  lccompile(lc);
+  bool compiled = lccompile(lc);
 
   clock_t end = clock();
   double time = (double)(end - begin) / CLOCKS_PER_SEC;
 
-  printf("Read %d characters\n", lc->lexer->srcLen);
-  // printTokens(lc->lexer);
-  printErrors(lc->lexer);
-  // printAST(lc->root, 0);
-  // print_ast(lc->root, 0);
-  // printf("%s\n", lc->lexer->src);
+  print_diagnostics(stderr, &lc->diagnostics, lc->lexer->src, (size_t)lc->lexer->srcLen);
 
   printf("Compiled in %f s\n", time);
 
   freeLC(lc);
 
-  return 0;
+  return compiled ? 0 : 1;
 }

@@ -1,7 +1,15 @@
 #include "../include/analyzer.h"
-#include "../include/errorlep.h"
 #include <assert.h>
+#include <stdarg.h>
 #include <string.h>
+
+static void semantic_error(SemanticAnalyzer *analyzer, const cLoc *location,
+                           const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  add_diagnosticv(analyzer->diagnostics, DIAGNOSTIC_ERROR, "semantic", location, format, args);
+  va_end(args);
+}
 
 symtabStack* init_st_stack() {
   symtabStack* sts = malloc(sizeof(symtabStack));
@@ -57,7 +65,8 @@ static void declare_functions(SemanticAnalyzer *analyzer, AST *root) {
     AST *return_type_node = params_node->next;
     token *name = name_node->tok;
     if (lookup_scope(currentScope(analyzer->symbols), name->value)) {
-      error_redef(name->value, F, name->loc);
+        semantic_error(analyzer, &name->loc, "redefinition of function '%s'", name->value);
+       continue;
     }
     stEntry *function_value = newVariable(analyzer->symbols, name->value, F);
     function_value->declLine = name->loc.line;
@@ -95,6 +104,7 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
         c->func_name = f->name;
         c->returned = false;
         c->ret_scope = -1;
+        c->declaration_location = name->loc;
         analyzer->current_function = c;
 
         semanticAnalysis(analyzer, header);
@@ -102,10 +112,12 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
 
         if (f->f_info->ret_type != VOID) {
           if (!c->returned) {
-            error_ret("not returning a value", f->name);
+            semantic_error(analyzer, &c->declaration_location,
+                           "function '%s' does not return a value", f->name);
           }
           if (c->ret_scope != sts->cur_scope) {
-            error_ret("not returning from all code paths", f->name);
+            semantic_error(analyzer, &c->declaration_location,
+                           "function '%s' does not return from all code paths", f->name);
           }
         }
 
@@ -117,8 +129,8 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
       return;
     }
     case AST_RET: {
-      TYPE ret_type = (ast->l) ? expr_type(sts, ast->l) : VOID;
-      TYPE func_ret_type;
+      TYPE ret_type = (ast->l) ? expr_type(analyzer, ast->l) : VOID;
+      TYPE func_ret_type = TYPE_ERROR;
       if (analyzer->current_function != NULL) {
         context* c = analyzer->current_function;
         func_ret_type = c->ret_type;
@@ -127,15 +139,16 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
           c->ret_scope = sts->cur_scope;
         }
       } else {
-        error_semantic("Return statement outside of a function\n", ast->tok->loc);
+        semantic_error(analyzer, &ast->tok->loc, "return statement outside of a function");
       }
-      if (!matchType(ret_type, func_ret_type)) {
-        error_type("Wrong function return type", ast->tok->loc, ret_type, func_ret_type);
+      if (ret_type != TYPE_ERROR && func_ret_type != TYPE_ERROR && !matchType(ret_type, func_ret_type)) {
+        semantic_error(analyzer, &ast->tok->loc, "wrong return type: expected %s, found %s",
+                       typeToStr(func_ret_type), typeToStr(ret_type));
       }
       break;
     }
     case AST_FCALL: {
-      typecheck_fcall(sts, ast);
+      typecheck_fcall(analyzer, ast);
       break;
     }
     case AST_BLOCK: {
@@ -149,11 +162,13 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
       AST* id = ast->r;
       if (id->type == AST_ASSIGNMENT) id = ast->r->l;
       if (lookup_all(sts, id->tok->value)) {
-        error_redef(id->tok->value, convertType(ast->l->tok->type), id->tok->loc);
+        semantic_error(analyzer, &id->tok->loc, "redefinition of '%s'", id->tok->value);
+        break;
       }
       TYPE variable_type = convertType(ast->l->tok->type);
       if (variable_type == VOID || variable_type == F) {
-        error_semantic("Variables cannot have type void or f", id->tok->loc);
+        semantic_error(analyzer, &id->tok->loc, "variables cannot have type %s", typeToStr(variable_type));
+        break;
       }
       stEntry* var = newVariable(sts, id->tok->value, variable_type);
       var->declLine = id->tok->loc.line;
@@ -161,7 +176,7 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
       if (analyzer->current_function != NULL) {
         context* c = analyzer->current_function;
         stEntry* f = lookup_all(sts, c->func_name);
-        for (int i = 0; i < f->f_info->n_params; i++) {
+        for (size_t i = 0; i < f->f_info->n_params; i++) {
           if (strcmp(f->f_info->params[i].name, var->name) == 0) {
             var->is_initialized = true;
             break;
@@ -171,7 +186,7 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
       break;
     }
     case AST_ASSIGNMENT: {
-      typecheck_assignment(sts, ast->l, ast->r);
+      typecheck_assignment(analyzer, ast->l, ast->r);
       semanticAnalysis(analyzer, ast->next);
       return;
     }
@@ -218,35 +233,41 @@ TYPE convertType(const int type) {
     case VOID:
       return VOID;
     default:
-      return -1;
+      return TYPE_ERROR;
   }
 }
 
 bool matchType(const int a, const int b) {
+  if (a == TYPE_ERROR || b == TYPE_ERROR) return true;
   return convertType(a) == convertType(b);
 }
 
-TYPE expr_type(symtabStack* sts, AST* expr) {
+TYPE expr_type(SemanticAnalyzer *analyzer, AST* expr) {
+  symtabStack *sts = analyzer->symbols;
   int type;
   if (expr->type == AST_OPERATOR) {
-    type = typecheck_operator(sts, expr->l, expr->r);
+    type = typecheck_operator(analyzer, expr->l, expr->r);
   }
   else if (expr->type == AST_FCALL) {
-    typecheck_fcall(sts, expr);
+    if (!typecheck_fcall(analyzer, expr)) return TYPE_ERROR;
     char* f_id = expr->l->tok->value;
     stEntry* f = lookup_all(sts, f_id);
     type = f->f_info->ret_type;
     if (matchType(type, VOID)) {
-      error_semantic("Function with ret type 'void' called in an expression", expr->l->tok->loc);
+      semantic_error(analyzer, &expr->l->tok->loc,
+                     "void function '%s' cannot be used as an expression", f_id);
+      return TYPE_ERROR;
     }
   }
   else if (expr->type == AST_ID) {
     stEntry* var = lookup_all(sts, expr->tok->value);
     if (!var) {
-      error_nodecl("Access", expr->tok->value, expr->tok->loc);
+      semantic_error(analyzer, &expr->tok->loc, "use of undeclared variable '%s'", expr->tok->value);
+      return TYPE_ERROR;
     }
     if (!var->is_initialized) {
-      error_value(var->name, var->type, expr->tok->loc);
+      semantic_error(analyzer, &expr->tok->loc, "variable '%s' has no assigned value", var->name);
+      return TYPE_ERROR;
     }
     type = var->type;
   } else {
@@ -255,64 +276,76 @@ TYPE expr_type(symtabStack* sts, AST* expr) {
   return convertType(type);
 }
 
-bool typecheck_fcall(symtabStack* sts, AST* fcall) {
+bool typecheck_fcall(SemanticAnalyzer *analyzer, AST* fcall) {
+  symtabStack *sts = analyzer->symbols;
   AST* arg = fcall->r->l;
   stEntry* f = lookup_all(sts, fcall->l->tok->value);
   if (!f) {
-    error_fnotfound(fcall->l->tok->value, fcall->l->tok->loc);
+    semantic_error(analyzer, &fcall->l->tok->loc, "no function named '%s' found", fcall->l->tok->value);
+    return false;
   }
-  int i = 0;
+  size_t i = 0;
   while(arg && i < f->f_info->n_params) {
-    TYPE type = expr_type(sts, arg);
+    TYPE type = expr_type(analyzer, arg);
     if (!matchType(type, f->f_info->params[i].type)) {
-      error_type("Wrong function argument type", arg->tok->loc, type, f->f_info->params[i].type);
+      semantic_error(analyzer, &arg->tok->loc, "wrong argument type: expected %s, found %s",
+                     typeToStr(f->f_info->params[i].type), typeToStr(type));
     }
     i++;
     arg = arg->next;
   }
   if (arg != NULL) {
-    error_semantic("Too many arguments given to fcall", arg->tok->loc);
+    semantic_error(analyzer, &arg->tok->loc, "too many arguments for function '%s'", f->name);
   }
   else if (i < f->f_info->n_params) {
-    error_semantic("Too few arguments given to fcall", fcall->l->tok->loc);
+    semantic_error(analyzer, &fcall->l->tok->loc, "too few arguments for function '%s'", f->name);
   }
 
   return true;
 }
 
-bool typecheck_assignment(symtabStack* sts, AST* lhs, AST* rhs) {
+bool typecheck_assignment(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs) {
+  symtabStack *sts = analyzer->symbols;
   int lhs_type, rhs_type;
   char* id = lhs->tok->value;
   stEntry* var = lookup_all(sts, id);
   if (!var) {
-    error_nodecl("Assignment", id, lhs->tok->loc);
+    semantic_error(analyzer, &lhs->tok->loc, "assignment to undeclared variable '%s'", id);
+    expr_type(analyzer, rhs);
+    return false;
   }
   lhs_type = var->type;
-  rhs_type = expr_type(sts, rhs);
+  rhs_type = expr_type(analyzer, rhs);
 
+  if (rhs_type == TYPE_ERROR) return false;
   if (!matchType(lhs_type, rhs_type)) {
-    error_type("Trying to assign a value of the wrong type", lhs->tok->loc, rhs_type, lhs_type);
+    semantic_error(analyzer, &lhs->tok->loc, "incompatible assignment: expected %s, found %s",
+                   typeToStr(lhs_type), typeToStr(rhs_type));
   }
   var->is_initialized = true;
   return true;
 }
 
-int typecheck_operator(symtabStack* sts, AST* lhs, AST* rhs) {
-  int lt = expr_type(sts, lhs);
-  int rt = expr_type(sts, rhs);
+int typecheck_operator(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs) {
+  int lt = expr_type(analyzer, lhs);
+  int rt = expr_type(analyzer, rhs);
 
+  if (lt == TYPE_ERROR || rt == TYPE_ERROR) return TYPE_ERROR;
   if (!matchType(lt, rt)) {
-    error_type("Operator operands must have the same type", lhs->tok->loc, rt, lt);
+    semantic_error(analyzer, &lhs->tok->loc, "operator operands must have the same type: %s and %s",
+                   typeToStr(lt), typeToStr(rt));
+    return TYPE_ERROR;
   }
   TYPE type = convertType(lt);
   if (type != INT && type != FLOAT) {
-    error_semantic("Arithmetic operators require int or float operands", lhs->tok->loc);
+    semantic_error(analyzer, &lhs->tok->loc, "arithmetic operators require int or float operands");
+    return TYPE_ERROR;
   }
   return type;
 }
 
-SemanticResult* analyzeAST(AST* root) {
-  SemanticAnalyzer analyzer = {init_st_stack(), NULL};
+SemanticResult* analyzeAST(AST* root, DiagnosticList *diagnostics) {
+  SemanticAnalyzer analyzer = {init_st_stack(), NULL, diagnostics};
   if (root && root->type == AST_PROGRAM) declare_functions(&analyzer, root);
   semanticAnalysis(&analyzer, root);
   assert(analyzer.symbols->cur_scope == 0);

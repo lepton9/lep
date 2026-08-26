@@ -5,27 +5,21 @@
 #include <assert.h>
 #include <string.h>
 
-Lexer *initLexer() {
+Lexer *initLexer(DiagnosticList *diagnostics) {
   Lexer *lexer = malloc(sizeof(Lexer));
   lexer->tokens = create_list();
-  lexer->errors = create_list();
   lexer->src = NULL;
   lexer->srcLen = 0;
   lexer->srcPos = 0;
   lexer->codeLoc.line = 1;
   lexer->codeLoc.column = 1;
+  lexer->diagnostics = diagnostics;
   return lexer;
 }
 
 void freeLexer(Lexer *lexer) {
   while (!is_empty(lexer->tokens)) freeToken(pop_front(lexer->tokens));
   free(lexer->tokens);
-  while (!is_empty(lexer->errors)) {
-    lexError *err = pop_front(lexer->errors);
-    free(err->msg);
-    free(err);
-  }
-  free(lexer->errors);
   free(lexer->src);
   free(lexer);
 }
@@ -46,6 +40,10 @@ LList* lex(Lexer *lexer) {
 
 void comment(Lexer* lexer) {
   while (!atEnd(lexer) && peek(lexer) != '\n') advance(lexer);
+}
+
+static void lexer_error(Lexer *lexer, cLoc location, const char *message) {
+  add_diagnostic(lexer->diagnostics, DIAGNOSTIC_ERROR, "lex", &location, "%s", message);
 }
 
 token *getNextToken(Lexer *lexer) {
@@ -86,7 +84,7 @@ token *getNextToken(Lexer *lexer) {
     case '\"':
       while (!atEnd(lexer) && peek(lexer) != '\"') advance(lexer);
       if (atEnd(lexer)) {
-        addSynError(lexer, lexerError(lexer, "No closing \"", begI, lexer->srcPos - begI));
+        lexer_error(lexer, cLocB, "unterminated string literal");
         return NULL;
       }
       advance(lexer);
@@ -94,7 +92,7 @@ token *getNextToken(Lexer *lexer) {
       return makeToken(T_LIT_STR, tv, cLocB);
     case '\'':
       if (atEnd(lexer) || advance(lexer) == '\'' || atEnd(lexer) || advance(lexer) != '\'') {
-        addSynError(lexer, lexerError(lexer, "Invalid char", begI, lexer->srcPos - begI));
+        lexer_error(lexer, cLocB, "invalid character literal");
         return NULL;
       }
       tv = malStrncpy(lexer->src + begI, lexer->srcPos - begI);
@@ -105,7 +103,7 @@ token *getNextToken(Lexer *lexer) {
           advance(lexer);
         }
         tv = malStrncpy(lexer->src + begI, lexer->srcPos - begI);
-        tokenType tt = isKeyword(lexer, tv);
+        tokenType tt = isKeyword(tv);
         if (tt == T_KW_TRUE || tt == T_KW_FALSE) tt = T_LIT_BOOL;
         // tt = (tt >= 0) ? tt : T_IDENTIFIER;
         return makeToken(tt, tv, cLocB);
@@ -119,7 +117,7 @@ token *getNextToken(Lexer *lexer) {
             tt = T_LIT_FLOAT;
             while (isdigit((unsigned char)peek(lexer))) advance(lexer);
           } else {
-            addSynError(lexer, lexerError(lexer, "Invalid float", begI, lexer->srcPos - begI));
+            lexer_error(lexer, cLocB, "invalid float literal");
             return NULL;
           }
         }
@@ -129,11 +127,11 @@ token *getNextToken(Lexer *lexer) {
     }
   }
 
-  addSynError(lexer, lexerError(lexer, "No token match", begI, lexer->srcPos - begI));
+  lexer_error(lexer, cLocB, "unrecognized token");
   return NULL;
 }
 
-tokenType isKeyword(Lexer *lexer, const char* value) {
+tokenType isKeyword(const char* value) {
   if (strcmp(value, "int") == 0) return T_KW_INT;
   if (strcmp(value, "char") == 0) return T_KW_CHAR;
   if (strcmp(value, "bool") == 0) return T_KW_BOOL;
@@ -159,31 +157,6 @@ char* malStrncpy(const char *s, const size_t n) {
 token* makeTokenN(Lexer* lexer, const tokenType type, const int beg, const cLoc cl) {
   char* tval = malStrncpy(lexer->src + beg, lexer->srcPos - beg);
   return makeToken(type, tval, cl);
-}
-
-lexError* lexerError(Lexer *lexer, const char* msg, const int beg, const int len) {
-  lexError *err = malloc(sizeof(lexError));
-  err->beg = beg;
-  err->len = len;
-  err->codeLoc = lexer->codeLoc;
-  err->msg = malloc(strlen(msg) + 1);
-  strcpy(err->msg, msg);
-  return err;
-}
-
-void addSynError(Lexer *lexer, lexError * err) {
-  add_to_end(lexer->errors, err);
-}
-
-void printError(Lexer *lexer, lexError *err) {
-  printf("(%.*s) | %s at L%d C%d\n", err->len, lexer->src + err->beg, err->msg, err->codeLoc.line, err->codeLoc.column);
-}
-
-void printErrors(Lexer *lexer) {
-  // printf("Lexing errors:\n");
-  for (node *head=lexer->errors->head; head != NULL; head = head->next) {
-    printError(lexer, head->data);
-  }
 }
 
 void printTokens(Lexer *lexer) {
@@ -213,29 +186,4 @@ char advance(Lexer *lexer) {
 void nextLine(Lexer *lexer) {
   lexer->codeLoc.line++;
   lexer->codeLoc.column = 1;
-}
-
-char* getLine(const char* src, const size_t srcLen, const int ln) {
-  size_t startI = 0;
-  size_t endI = srcLen;
-  int curLine = 1;
-  char* line;
-  for (size_t i = 0; i < srcLen; i++) {
-    if (curLine == ln) {
-      startI = i;
-      for (size_t ie = i; ie < srcLen; ie++) {
-        if (src[ie] == '\n') {
-          endI = ie;
-          break;
-        }
-      }
-      break;
-    }
-    if (src[i] == '\n') curLine++;
-  }
-  size_t len = endI - startI;
-  line = malloc(len + 1);
-  memcpy(line, src + startI, len);
-  line[len] = '\0';
-  return line;
 }

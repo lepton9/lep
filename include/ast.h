@@ -1,7 +1,6 @@
 #ifndef AST_H
 #define AST_H
 
-#include "../include/dlist.h"
 #include "../include/token.h"
 
 typedef struct AST_NODE {

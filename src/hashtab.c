@@ -30,7 +30,7 @@ hashtab* init_hashtabn(const size_t size) {
 }
 
 void free_hashtab(hashtab* ht) {
-  for (int i = 0; i < ht->size; i++) {
+  for (size_t i = 0; i < ht->size; i++) {
     if (ht->items[i]) free_item(ht->items[i]);
   }
   free(ht->items);
@@ -47,12 +47,12 @@ static uint64_t hash_key(const char* key) {
   return hash;
 }
 
-int key_index(const char* key, const size_t size) {
+static size_t key_index(const char* key, const size_t size) {
   return hash_key(key) % size;
 }
 
 static ht_e* ht_set(ht_e** items, const size_t size, size_t* n, const char* key, void* value) {
-  int ind = key_index(key, size);
+  size_t ind = key_index(key, size);
   while(items[ind] != NULL) {
     if (strcmp(key, items[ind]->key) == 0) {
       items[ind]->value = value;
@@ -93,7 +93,7 @@ ht_e* ht_insert(hashtab* ht, const char* key, void* value) {
 }
 
 ht_e* ht_lookup(hashtab* ht, const char* key) {
-  int ind = key_index(key, ht->size);
+  size_t ind = key_index(key, ht->size);
   while(ht->items[ind] != NULL) {
     if (strcmp(key, ht->items[ind]->key) == 0) {
       return ht->items[ind];
@@ -110,7 +110,7 @@ void* ht_get(hashtab* ht, const char* key) {
 }
 
 bool ht_delete(hashtab* ht, const char* key) {
-  int ind = key_index(key, ht->size);
+  size_t ind = key_index(key, ht->size);
   while(ht->items[ind] != NULL) {
     if (strcmp(key, ht->items[ind]->key) == 0) {
       free_item(ht->items[ind]);
@@ -122,4 +122,3 @@ bool ht_delete(hashtab* ht, const char* key) {
   }
   return false;
 }
-

@@ -1,17 +1,16 @@
 #ifndef PARSER_H
 #define PARSER_H
 
-#include "../include/LList.h"
 #include "../include/lexer.h"
 #include "../include/ast.h"
 #include "../include/token.h"
 
 typedef struct {
-  // LList *tokens;
   Lexer *lexer;
 
   node *node;
   token *token;
+  DiagnosticList *diagnostics;
 } parser;
 
 parser *initParser(Lexer* lexer);
@@ -26,7 +25,6 @@ int acceptType(parser* p);
 int accept(parser *p, tokenType type);
 int expect(parser *p, tokenType type);
 token *nextToken(parser *p);
-// void errorSyntax(parser* p, const char *msg, const char* expected);
 token* peekToken(parser* p);
 int digits(int n);
 

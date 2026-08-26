@@ -57,6 +57,7 @@ void exit_scope(symtabStack* sts) {
 
 const char* typeToStr(const TYPE type) {
   switch (type) {
+    case TYPE_ERROR: return "<error>";
     case INT: return "int";
     case FLOAT: return "float";
     case CHAR: return "char";

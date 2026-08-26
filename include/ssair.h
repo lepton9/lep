@@ -7,6 +7,7 @@
 #include "ast.h"
 #include "analyzer.h"
 #include "symtab.h"
+#include "diagnostic.h"
 
 typedef enum {
   OP_COPY,
@@ -105,11 +106,11 @@ typedef struct {
   ssa_node *entry;
   ssa_node *last;
   bool valid;
-  char *error;
+  DiagnosticList *diagnostics;
 } ssa;
 
 // Lowers a semantically validated program.
-ssa *generate_ssair(AST *root, const SemanticResult *semantic);
+ssa *generate_ssair(AST *root, const SemanticResult *semantic, DiagnosticList *diagnostics);
 void print_ssair(FILE *out, const ssa *ir);
 void free_ssair(ssa *ir);
 

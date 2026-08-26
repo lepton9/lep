@@ -1,11 +1,10 @@
 #include "../include/parser.h"
-#include "../include/errorlep.h"
 #include <stdlib.h>
-#include <stdio.h>
 
 parser *initParser(Lexer* lexer) {
   parser *p = malloc(sizeof(parser));
   p->lexer = lexer;
+  p->diagnostics = lexer->diagnostics;
   return p;
 }
 
@@ -23,6 +22,16 @@ token* peekToken(parser* p) {
   return p->node->next->data;
 }
 
+static void parser_error(parser *p, const char *message, const char *expected) {
+  if (expected) {
+    add_diagnostic(p->diagnostics, DIAGNOSTIC_ERROR, "parse", &p->token->loc,
+                   "%s: expected %s, found %s", message, expected, tokenTypeToStr(p->token->type));
+  } else {
+    add_diagnostic(p->diagnostics, DIAGNOSTIC_ERROR, "parse", &p->token->loc,
+                   "%s: found %s", message, tokenTypeToStr(p->token->type));
+  }
+}
+
 int accept(parser* p, tokenType type) {
   if (p->token->type == type) {
     nextToken(p);
@@ -35,8 +44,16 @@ int expect(parser *p, tokenType type) {
   if (accept(p, type)) {
     return 1;
   }
-  error_parse(p, "Unexpected token", tokenTypeToStr(type));
+  parser_error(p, "Unexpected token", tokenTypeToStr(type));
   return 0;
+}
+
+static void synchronize_statement(parser *p) {
+  while (p->token->type != T_EOF && p->token->type != T_SEMICOLON &&
+         p->token->type != T_BRACE_R) {
+    nextToken(p);
+  }
+  if (p->token->type == T_SEMICOLON) nextToken(p);
 }
 
 int acceptOp(parser* p) {
@@ -123,7 +140,8 @@ AST* parse_program(parser* p) {
       d = parse_var_decl(p);
       expect(p, T_SEMICOLON);
     } else {
-      error_parse(p, "Unexpected definition", tokenTypeToStr(p->token->type));
+      parser_error(p, "Unexpected definition", tokenTypeToStr(p->token->type));
+      nextToken(p);
     }
     if (d) {
       cur->next = d;
@@ -216,7 +234,8 @@ AST* parse_primary(parser *p) {
     term = parse_expr(p);
     expect(p, T_PAREN_R);
   } else {
-    error_parse(p, "Unknown term", NULL);
+    parser_error(p, "Unknown term", NULL);
+    nextToken(p);
   }
   return term;
 }
@@ -292,18 +311,19 @@ AST* parse_block(parser* p) {
 AST* parse_statements(parser *p) {
   AST *statements = NULL;
   AST *cur = NULL;
-  while (p->token->type != T_BRACE_R) {
+  while (p->token->type != T_BRACE_R && p->token->type != T_EOF) {
     AST *next_statement = parse_statement(p);
-    if (statements == NULL) statements = next_statement;
-    else cur->next = next_statement;
-    cur = next_statement;
+    if (next_statement) {
+      if (statements == NULL) statements = next_statement;
+      else cur->next = next_statement;
+      cur = next_statement;
+    }
   }
   return statements;
 }
 
 AST* parse_statement(parser *p) {
   AST *statement = NULL;
-  token* t = p->token;
   while (accept(p, T_SEMICOLON));
   if (isType(p)) {
     statement = parse_var_decl(p);
@@ -318,8 +338,9 @@ AST* parse_statement(parser *p) {
   } else if (p->token->type == T_KW_RET) {
     statement = parse_return(p);
   } else {
-    error_parse(p, "Unknown statement", NULL);
-    exit(1);
+    parser_error(p, "Unknown statement", NULL);
+    synchronize_statement(p);
+    return NULL;
   }
   expect(p, T_SEMICOLON);
   return statement;
@@ -375,14 +396,3 @@ int digits(int n)
   }
   return count;
 }
-
-// void errorSyntax(parser* p, const char *msg, const char* expected) {
-//   if (expected) {
-//     printf("[Syntax error] %s : %s != %s, at L%-2d C%d\n", msg, tokenTypeToStr(p->token->type), expected, p->token->loc.line, p->token->loc.column);
-//   } else {
-//     printf("[Syntax error] %s : %s, at L%-2d C%d\n", msg, tokenTypeToStr(p->token->type), p->token->loc.line, p->token->loc.column);
-//   }
-//   printf("%d: %s\n", p->token->loc.line, getLine(p->lexer, p->token->loc.line));
-//   printf("%*c^\n", p->token->loc.column + digits(p->token->loc.line) + 1, ' ');
-//   exit(1);
-// }

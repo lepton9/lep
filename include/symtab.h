@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 typedef enum {
+  TYPE_ERROR = -1,
   INT = 200,
   FLOAT,
   CHAR,
