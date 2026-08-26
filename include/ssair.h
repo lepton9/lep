@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "ast.h"
+#include "analyzer.h"
 #include "symtab.h"
 
 typedef enum {
@@ -107,11 +108,12 @@ typedef struct {
   char *error;
 } ssa;
 
-ssa *generate_ssair(AST *root);
+// Lowers a semantically validated program.
+ssa *generate_ssair(AST *root, const SemanticResult *semantic);
 void print_ssair(FILE *out, const ssa *ir);
 void free_ssair(ssa *ir);
 
-/* Returns an owned SSA identifier. */
+// Returns an owned SSA identifier.
 char *var_name(const char *name, unsigned version);
 
 #endif

@@ -17,21 +17,13 @@ typedef struct version_counter {
   struct version_counter *next;
 } version_counter;
 
-typedef struct function_signature {
-  char *name;
-  TYPE return_type;
-  TYPE *params;
-  size_t param_count;
-  struct function_signature *next;
-} function_signature;
-
 typedef struct {
   ssa *ir;
   function *function;
   basic_block *block;
   binding *bindings;
   version_counter *versions;
-  function_signature *signatures;
+  const SemanticResult *semantic;
   unsigned next_block_id;
   bool terminated;
 } builder;
@@ -186,12 +178,10 @@ static bool is_value_type(TYPE type) {
   return type == INT || type == FLOAT || type == CHAR || type == BOOL || type == STR;
 }
 
-// Finds a module-wide function signature with the given name.
-static function_signature *lookup_signature(builder *build, const char *name) {
-  for (function_signature *current = build->signatures; current; current = current->next) {
-    if (strcmp(current->name, name) == 0) return current;
-  }
-  return NULL;
+static stEntry *lookup_function(builder *build, const char *name) {
+  if (!build->semantic || !build->semantic->symbols) return NULL;
+  stEntry *entry = lookup_scope(currentScope(build->semantic->symbols), name);
+  return entry && entry->type == F ? entry : NULL;
 }
 
 static operand literal_operand(builder *build, AST *expression) {
@@ -217,12 +207,13 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 // Lowers a function call and returns its SSA result.
 static operand emit_call(builder *build, AST *call, const operand *target) {
   const char *callee = call->l->tok->value;
-  function_signature *signature = lookup_signature(build, callee);
-  if (!signature) {
+  stEntry *function_value = lookup_function(build, callee);
+  if (!function_value || !function_value->f_info) {
     set_error(build->ir, "no SSA function signature is available for '%s'", callee);
     return none_operand();
   }
-  if (signature->return_type == VOID && target) {
+  func_info *signature = function_value->f_info;
+  if (signature->ret_type == VOID && target) {
     set_error(build->ir, "void function '%s' cannot be used as an expression", callee);
     return none_operand();
   }
@@ -233,13 +224,13 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
     args = realloc(args, (arg_count + 1) * sizeof(*args));
     args[arg_count] = emit_expression(build, argument, NULL);
     if (build->ir->valid &&
-        (arg_count >= signature->param_count ||
-         args[arg_count].type != signature->params[arg_count])) {
+        (arg_count >= signature->n_params ||
+         args[arg_count].type != signature->params[arg_count].type)) {
       set_error(build->ir, "call to '%s' has an incompatible argument", callee);
     }
     arg_count++;
   }
-  if (build->ir->valid && arg_count != signature->param_count) {
+  if (build->ir->valid && arg_count != signature->n_params) {
     set_error(build->ir, "call to '%s' has the wrong number of arguments", callee);
   }
   if (!build->ir->valid) {
@@ -249,10 +240,10 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
   }
 
   operand result = none_operand();
-  if (signature->return_type != VOID) {
+  if (signature->ret_type != VOID) {
     const char* result_var = "tmp";
     result = target ? copy_operand(*target) :
-        value_operand(result_var, next_version(build, result_var), signature->return_type);
+        value_operand(result_var, next_version(build, result_var), signature->ret_type);
   }
   append_call(build, callee, result, args, arg_count);
   for (size_t index = 0; index < arg_count; index++) free_operand(args[index]);
@@ -397,23 +388,31 @@ static void emit_statement_list(builder *build, AST *statement) {
   }
 }
 
-// Lowers one function body into its entry block.
-static function *emit_function(ssa *ir, AST *ast, function_signature *signatures) {
+// Lowers one function body using its semantic function contract.
+static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic) {
   AST *header = ast->l;
   AST *name_node = header->l;
   AST *params_node = name_node->next;
-  AST *return_type_node = params_node->next;
   function *function_value = calloc(1, sizeof(*function_value));
-  builder build = {.ir = ir, .function = function_value, .signatures = signatures};
+  builder build = {.ir = ir, .function = function_value, .semantic = semantic};
 
   function_value->name = duplicate_string(name_node->tok->value);
-  function_value->return_type = ast_type(return_type_node);
+  stEntry *function_symbol = lookup_function(&build, function_value->name);
+  if (!function_symbol || !function_symbol->f_info) {
+    set_error(ir, "no semantic function signature is available for '%s'", function_value->name);
+    return function_value;
+  }
+  function_value->return_type = function_symbol->f_info->ret_type;
   build.block = create_block(build.next_block_id++);
   function_value->entry_block = build.block;
   function_value->blocks = build.block;
 
   for (AST *parameter = params_node->l; parameter; parameter = parameter->next) {
-    TYPE parameter_type = ast_type(parameter->l);
+    if (function_value->param_count >= function_symbol->f_info->n_params) {
+      set_error(ir, "semantic parameter count does not match function '%s'", function_value->name);
+      break;
+    }
+    TYPE parameter_type = function_symbol->f_info->params[function_value->param_count].type;
     if (!is_value_type(parameter_type)) {
       set_error(ir, "SSA parameters must have a value type");
       break;
@@ -425,6 +424,9 @@ static function *emit_function(ssa *ir, AST *ast, function_signature *signatures
     function_value->params[index] = value_operand(parameter_name,
                                                    next_version(&build, parameter_name), parameter_type);
     bind_value(&build, parameter_name, function_value->params[index]);
+  }
+  if (ir->valid && function_value->param_count != function_symbol->f_info->n_params) {
+    set_error(ir, "semantic parameter count does not match function '%s'", function_value->name);
   }
   emit_statement_list(&build, ast->r->l);
   if (ir->valid && !build.terminated) {
@@ -449,39 +451,6 @@ static function *emit_function(ssa *ir, AST *ast, function_signature *signatures
     build.versions = next;
   }
   return function_value;
-}
-
-// Collects all headers before body lowering so forward calls are valid.
-static function_signature *collect_signatures(AST *root) {
-  function_signature *signatures = NULL;
-  for (AST *node = root->next; node; node = node->next) {
-    if (node->type != AST_FUNCTION) continue;
-    AST *header = node->l;
-    AST *name_node = header->l;
-    AST *params_node = name_node->next;
-    AST *return_type_node = params_node->next;
-    function_signature *signature = calloc(1, sizeof(*signature));
-    signature->name = duplicate_string(name_node->tok->value);
-    signature->return_type = ast_type(return_type_node);
-    for (AST *parameter = params_node->l; parameter; parameter = parameter->next) {
-      signature->params = realloc(signature->params,
-                                  (signature->param_count + 1) * sizeof(*signature->params));
-      signature->params[signature->param_count++] = ast_type(parameter->l);
-    }
-    signature->next = signatures;
-    signatures = signature;
-  }
-  return signatures;
-}
-
-static void free_signatures(function_signature *signatures) {
-  while (signatures) {
-    function_signature *next = signatures->next;
-    free(signatures->name);
-    free(signatures->params);
-    free(signatures);
-    signatures = next;
-  }
 }
 
 static global_var *emit_global(ssa *ir, AST *ast) {
@@ -514,20 +483,19 @@ static global_var *emit_global(ssa *ir, AST *ast) {
 }
 
 // Generates a complete module.
-ssa *generate_ssair(AST *root) {
+ssa *generate_ssair(AST *root, const SemanticResult *semantic) {
   ssa *ir = calloc(1, sizeof(*ir));
   ir->valid = true;
-  if (!root || root->type != AST_PROGRAM) {
-    set_error(ir, "SSA generation requires a program AST");
+  if (!root || root->type != AST_PROGRAM || !semantic || !semantic->symbols) {
+    set_error(ir, "SSA generation requires a program AST and semantic result");
     return ir;
   }
-  function_signature *signatures = collect_signatures(root);
 
   for (AST *node = root->next; node && ir->valid; node = node->next) {
     ssa_node *module_node = calloc(1, sizeof(*module_node));
     if (node->type == AST_FUNCTION) {
       module_node->type = FUNCTION;
-      module_node->value.function = emit_function(ir, node, signatures);
+      module_node->value.function = emit_function(ir, node, semantic);
     } else if (node->type == AST_VARIABLE) {
       module_node->type = GLOBAL_VAR;
       module_node->value.global = emit_global(ir, node);
@@ -540,7 +508,6 @@ ssa *generate_ssair(AST *root) {
     else ir->entry = module_node;
     ir->last = module_node;
   }
-  free_signatures(signatures);
   return ir;
 }
 

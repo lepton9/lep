@@ -28,11 +28,11 @@ void lccompile(lc *lc) {
   lc->root = parse(lc->parser);
 
   SemanticResult *semantic_result = analyzeAST(lc->root);
-  freeSemanticResult(semantic_result);
 
-  ssa *ir = generate_ssair(lc->root);
+  ssa *ir = generate_ssair(lc->root, semantic_result);
   print_ssair(stdout, ir);
   free_ssair(ir);
+  freeSemanticResult(semantic_result);
 }
 
 
