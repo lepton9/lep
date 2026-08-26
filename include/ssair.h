@@ -53,6 +53,7 @@ typedef struct instruction {
   operand dest;
   operand src1;
   operand src2;
+  char *callee;
   operand *args;
   size_t arg_count;
   struct instruction *next;

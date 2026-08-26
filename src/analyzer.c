@@ -47,6 +47,35 @@ stEntry* newVariable(symtabStack* sts, const char* id, const TYPE type) {
   return var;
 }
 
+// Collect all the function declarations from the AST.
+static void declare_functions(SemanticAnalyzer *analyzer, AST *root) {
+  for (AST *node = root->next; node; node = node->next) {
+    if (node->type != AST_FUNCTION) continue;
+    AST *header = node->l;
+    AST *name_node = header->l;
+    AST *params_node = name_node->next;
+    AST *return_type_node = params_node->next;
+    token *name = name_node->tok;
+    if (lookup_scope(currentScope(analyzer->symbols), name->value)) {
+      error_redef(name->value, F, name->loc);
+    }
+    stEntry *function_value = newVariable(analyzer->symbols, name->value, F);
+    function_value->declLine = name->loc.line;
+    function_value->f_info = calloc(1, sizeof(*function_value->f_info));
+    function_value->f_info->ret_type = convertType(return_type_node->tok->type);
+    for (AST *parameter_node = params_node->l; parameter_node;
+         parameter_node = parameter_node->next) {
+      size_t index = function_value->f_info->n_params++;
+      function_value->f_info->params = realloc(function_value->f_info->params,
+          function_value->f_info->n_params * sizeof(*function_value->f_info->params));
+      function_value->f_info->params[index] = (parameter){
+          parameter_node->r->tok->value,
+          convertType(parameter_node->l->tok->type),
+      };
+    }
+  }
+}
+
 void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
   if (ast == NULL) return;
   symtabStack* sts = analyzer->symbols;
@@ -55,24 +84,9 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
     case AST_FUNCTION: {
       AST* header = ast->l;
       AST* body = ast->r;
-      AST* param = header->l->next->l;
       token* name = header->l->tok;
-      if (lookup_all(sts, name->value)) {
-        error_redef(name->value, F, name->loc);
-      }
-      stEntry* f = newVariable(sts, name->value, F);
-      f->declLine = name->loc.line;
-      f->f_info = malloc(sizeof(func_info));
-      f->f_info->ret_type = convertType(ast->l->l->next->next->tok->type);
-      f->f_info->n_params = 0;
-      f->f_info->params = NULL;
-      while (param) {
-        f->f_info->params = realloc(f->f_info->params, sizeof(parameter) * (f->f_info->n_params + 1));
-        f->f_info->params[f->f_info->n_params] = (parameter){param->r->tok->value, convertType(param->l->tok->type)};
-        assert(param->type == AST_VARIABLE);
-        f->f_info->n_params++;
-        param = param->next;
-      }
+      stEntry* f = lookup_scope(currentScope(sts), name->value);
+      assert(f && f->type == F && f->f_info);
       enter_scope(sts);
       {
         context* previous_function = analyzer->current_function;
@@ -299,6 +313,7 @@ int typecheck_operator(symtabStack* sts, AST* lhs, AST* rhs) {
 
 SemanticResult* analyzeAST(AST* root) {
   SemanticAnalyzer analyzer = {init_st_stack(), NULL};
+  if (root && root->type == AST_PROGRAM) declare_functions(&analyzer, root);
   semanticAnalysis(&analyzer, root);
   assert(analyzer.symbols->cur_scope == 0);
 
