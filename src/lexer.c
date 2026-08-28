@@ -26,6 +26,7 @@ void freeLexer(Lexer *lexer) {
 
 LList* lex(Lexer *lexer) {
   token *tok;
+  // TODO: tokenize while parsing. No need to tokenize the whole file
   while (!atEnd(lexer)) {
     tok = getNextToken(lexer);
     if (tok) {
@@ -71,7 +72,44 @@ token *getNextToken(Lexer *lexer) {
     case '}': return makeTokenN(lexer, T_BRACE_R, begI, cLocB);
     case '.': return makeTokenN(lexer, T_DOT, begI, cLocB);
     case ',': return makeTokenN(lexer, T_COMMA, begI, cLocB);
-    case '=': return makeTokenN(lexer, T_EQUALS, begI, cLocB);
+    case '=':
+      if (peek(lexer) == '=') {
+        advance(lexer);
+        return makeTokenN(lexer, T_EQ, begI, cLocB);
+      }
+      return makeTokenN(lexer, T_EQUALS, begI, cLocB);
+    case '!':
+      if (peek(lexer) == '=') {
+        advance(lexer);
+        return makeTokenN(lexer, T_NEQ, begI, cLocB);
+      }
+      return makeTokenN(lexer, T_BANG, begI, cLocB);
+    case '<':
+      if (peek(lexer) == '=') {
+        advance(lexer);
+        return makeTokenN(lexer, T_LE, begI, cLocB);
+      }
+      return makeTokenN(lexer, T_LT, begI, cLocB);
+    case '>':
+      if (peek(lexer) == '=') {
+        advance(lexer);
+        return makeTokenN(lexer, T_GE, begI, cLocB);
+      }
+      return makeTokenN(lexer, T_GT, begI, cLocB);
+    case '&':
+      if (peek(lexer) == '&') {
+        advance(lexer);
+        return makeTokenN(lexer, T_AND, begI, cLocB);
+      }
+      lexer_error(lexer, cLocB, "expected '&' after '&'");
+      return NULL;
+    case '|':
+      if (peek(lexer) == '|') {
+        advance(lexer);
+        return makeTokenN(lexer, T_OR, begI, cLocB);
+      }
+      lexer_error(lexer, cLocB, "expected '|' after '|'");
+      return NULL;
     case '+': return makeTokenN(lexer, T_PLUS, begI, cLocB);
     case '*': return makeTokenN(lexer, T_ASTERISK, begI, cLocB);
     case '/': return makeTokenN(lexer, T_SLASH, begI, cLocB);
@@ -132,6 +170,7 @@ token *getNextToken(Lexer *lexer) {
 }
 
 tokenType isKeyword(const char* value) {
+  // TODO: optimize
   if (strcmp(value, "int") == 0) return T_KW_INT;
   if (strcmp(value, "char") == 0) return T_KW_CHAR;
   if (strcmp(value, "bool") == 0) return T_KW_BOOL;
@@ -143,6 +182,9 @@ tokenType isKeyword(const char* value) {
   if (strcmp(value, "false") == 0) return T_KW_FALSE;
   if (strcmp(value, "main") == 0) return T_KW_MAIN;
   if (strcmp(value, "return") == 0) return T_KW_RET;
+  if (strcmp(value, "if") == 0) return T_KW_IF;
+  if (strcmp(value, "else") == 0) return T_KW_ELSE;
+  if (strcmp(value, "while") == 0) return T_KW_WHILE;
   return T_IDENTIFIER;
 }
 

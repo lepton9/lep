@@ -1,5 +1,3 @@
-# lepton
+# lep
 
-Programming language inspired by C, math and other.
-
-
+A simple general purpose programming language.

@@ -25,6 +25,8 @@ typedef struct AST_NODE {
     AST_VALUE,
     AST_OPERATOR,
     AST_RET,
+    AST_IF,
+    AST_WHILE,
   } type;
 
   token* tok;

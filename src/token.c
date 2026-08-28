@@ -42,6 +42,15 @@ const char* tokenTypeToStr(tokenType type) {
       return "T_COMMA";
     case T_EQUALS:
       return "T_EQUALS";
+    case T_EQ: return "T_EQ";
+    case T_NEQ: return "T_NEQ";
+    case T_LT: return "T_LT";
+    case T_LE: return "T_LE";
+    case T_GT: return "T_GT";
+    case T_GE: return "T_GE";
+    case T_BANG: return "T_BANG";
+    case T_AND: return "T_AND";
+    case T_OR: return "T_OR";
     case T_PLUS:
       return "T_PLUS";
     case T_MINUS:
@@ -84,6 +93,9 @@ const char* tokenTypeToStr(tokenType type) {
       return "T_KW_MAIN";
     case T_KW_RET:
       return "T_KW_RET";
+    case T_KW_IF: return "T_KW_IF";
+    case T_KW_ELSE: return "T_KW_ELSE";
+    case T_KW_WHILE: return "T_KW_WHILE";
     case T_ERROR:
       return "T_ERROR";
     case T_EOF:

@@ -19,6 +19,15 @@ typedef enum {
   // Operators
   T_OPERATOR,
   T_EQUALS,
+  T_EQ,
+  T_NEQ,
+  T_LT,
+  T_LE,
+  T_GT,
+  T_GE,
+  T_BANG,
+  T_AND,
+  T_OR,
   T_PLUS,
   T_MINUS,
   T_ASTERISK,
@@ -44,6 +53,9 @@ typedef enum {
   T_KW_FALSE,
   T_KW_MAIN,
   T_KW_RET,
+  T_KW_IF,
+  T_KW_ELSE,
+  T_KW_WHILE,
 
   T_ERROR,
 

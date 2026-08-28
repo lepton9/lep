@@ -13,6 +13,8 @@
               | <assignment> ";"
               | <return_statement> ";"
               | <function_call> ";"
+              | <if_statement>
+              | <while_statement>
               | <block> [ ";" ]
 
 <variable_declaration> ::= <type> ":" <id> [ "=" <expression> ]
@@ -21,7 +23,15 @@
 <function_call> ::= <id> "(" [ <argument_list> ] ")"
 <argument_list> ::= <expression> { "," <expression> }
 
-<expression> ::= <additive_expression>
+<if_statement> ::= "if" "(" <expression> ")" <block>
+                   [ "else" ( <block> | <if_statement> ) ]
+<while_statement> ::= "while" "(" <expression> ")" <block>
+
+<expression> ::= <logical_or_expression>
+<logical_or_expression> ::= <logical_and_expression> { "||" <logical_and_expression> }
+<logical_and_expression> ::= <equality_expression> { "&&" <equality_expression> }
+<equality_expression> ::= <relational_expression> { ( "==" | "!=" ) <relational_expression> }
+<relational_expression> ::= <additive_expression> { ( "<" | "<=" | ">" | ">=" ) <additive_expression> }
 <additive_expression> ::= <multiplicative_expression>
                           { ( "+" | "-" ) <multiplicative_expression> }
 <multiplicative_expression> ::= <primary_expression>
@@ -29,6 +39,7 @@
 <primary_expression> ::= <id>
                        | <literal>
                        | <function_call>
+                       | "!" <primary_expression>
                        | "(" <expression> ")"
 
 <id> ::= <letter> { <letter> }*

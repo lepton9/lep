@@ -224,7 +224,10 @@ AST* parse_func_param(parser* p) {
 AST* parse_primary(parser *p) {
   AST* term = NULL;
   token* t = p->token;
-  if (p->token->type == T_IDENTIFIER && peekToken(p)->type == T_PAREN_L) {
+  if (accept(p, T_BANG)) {
+    term = initAST(AST_OPERATOR, t);
+    term->l = parse_primary(p);
+  } else if (p->token->type == T_IDENTIFIER && peekToken(p)->type == T_PAREN_L) {
     term = parse_fcall(p);
   } else if (accept(p, T_IDENTIFIER)) {
     term = initAST(AST_ID, t);
@@ -337,6 +340,10 @@ AST* parse_statement(parser *p) {
     return statement;
   } else if (p->token->type == T_KW_RET) {
     statement = parse_return(p);
+  } else if (p->token->type == T_KW_IF) {
+    return parse_if(p);
+  } else if (p->token->type == T_KW_WHILE) {
+    return parse_while(p);
   } else {
     parser_error(p, "Unknown statement", NULL);
     synchronize_statement(p);
@@ -355,6 +362,33 @@ AST* parse_return(parser *p) {
   AST* ret_node = initAST(AST_RET, t);
   ret_node->l = expr_node;
   return ret_node;
+}
+
+AST* parse_if(parser *p) {
+  token *t = p->token;
+  expect(p, T_KW_IF);
+  expect(p, T_PAREN_L);
+  AST *condition = parse_expr(p);
+  expect(p, T_PAREN_R);
+  AST *then_block = parse_block(p);
+  AST *if_node = initAST(AST_IF, t);
+  if_node->l = condition;
+  if_node->r = then_block;
+  if (accept(p, T_KW_ELSE)) {
+    then_block->next = p->token->type == T_KW_IF ? parse_if(p) : parse_block(p);
+  }
+  return if_node;
+}
+
+AST* parse_while(parser *p) {
+  token *t = p->token;
+  expect(p, T_KW_WHILE);
+  expect(p, T_PAREN_L);
+  AST *while_node = initAST(AST_WHILE, t);
+  while_node->l = parse_expr(p);
+  expect(p, T_PAREN_R);
+  while_node->r = parse_block(p);
+  return while_node;
 }
 
 AST* parse_multiplicative_expr(parser* p) {
@@ -384,7 +418,49 @@ AST* parse_additive_expr(parser* p) {
 }
 
 AST* parse_expr(parser* p) {
-  return parse_additive_expr(p);
+  return parse_logical_or_expr(p);
+}
+
+static bool op_matches(tokenType type, const tokenType *operators) {
+  for (; *operators; operators++) {
+    if (type == *operators) return true;
+  }
+  return false;
+}
+
+static AST *parse_binary_expr(parser *p, AST *(*next)(parser *),
+                              const tokenType *operators) {
+  AST *expr = next(p);
+  while (op_matches(p->token->type, operators)) {
+    token *op = p->token;
+    nextToken(p);
+    AST *op_node = initAST(AST_OPERATOR, op);
+    op_node->l = expr;
+    op_node->r = next(p);
+    expr = op_node;
+  }
+  return expr;
+}
+
+static const tokenType relational_operators[] = {T_LT, T_LE, T_GT, T_GE, 0};
+static const tokenType equality_operators[] = {T_EQ, T_NEQ, 0};
+static const tokenType and_operators[] = {T_AND, 0};
+static const tokenType or_operators[] = {T_OR, 0};
+
+AST* parse_relational_expr(parser *p) {
+  return parse_binary_expr(p, parse_additive_expr, relational_operators);
+}
+
+AST* parse_equality_expr(parser *p) {
+  return parse_binary_expr(p, parse_relational_expr, equality_operators);
+}
+
+AST* parse_logical_and_expr(parser *p) {
+  return parse_binary_expr(p, parse_equality_expr, and_operators);
+}
+
+AST* parse_logical_or_expr(parser *p) {
+  return parse_binary_expr(p, parse_logical_and_expr, or_operators);
 }
 
 int digits(int n)

@@ -54,5 +54,11 @@ AST* parse_multiplicative_expr(parser *p);
 AST* parse_additive_expr(parser *p);
 AST* parse_expr(parser *p);
 AST* parse_return(parser *p);
+AST* parse_if(parser *p);
+AST* parse_while(parser *p);
+AST* parse_logical_or_expr(parser *p);
+AST* parse_logical_and_expr(parser *p);
+AST* parse_equality_expr(parser *p);
+AST* parse_relational_expr(parser *p);
 
 #endif

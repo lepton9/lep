@@ -45,7 +45,7 @@ TYPE expr_type(SemanticAnalyzer *analyzer, AST* expr);
 
 bool typecheck_fcall(SemanticAnalyzer *analyzer, AST* fcall);
 bool typecheck_assignment(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs);
-int typecheck_operator(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs);
+int typecheck_operator(SemanticAnalyzer *analyzer, AST* op);
 
 
 #endif

@@ -11,6 +11,22 @@ static void semantic_error(SemanticAnalyzer *analyzer, const cLoc *location,
   va_end(args);
 }
 
+// Check if the block including the statement returns.
+static bool definitely_returns(AST *statement) {
+  for (AST *current = statement; current; current = current->next) {
+    if (current->type == AST_RET) return true;
+    if (current->type == AST_BLOCK && definitely_returns(current->l)) return true;
+    if (current->type == AST_IF) {
+      AST *else_branch = current->r ? current->r->next : NULL;
+      if (else_branch && definitely_returns(current->r->l) &&
+          definitely_returns(else_branch->type == AST_IF ? else_branch : else_branch->l)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 symtabStack* init_st_stack() {
   symtabStack* sts = malloc(sizeof(symtabStack));
   sts->cur_scope = 0;
@@ -110,15 +126,9 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
         semanticAnalysis(analyzer, header);
         semanticAnalysis(analyzer, body);
 
-        if (f->f_info->ret_type != VOID) {
-          if (!c->returned) {
-            semantic_error(analyzer, &c->declaration_location,
-                           "function '%s' does not return a value", f->name);
-          }
-          if (c->ret_scope != sts->cur_scope) {
-            semantic_error(analyzer, &c->declaration_location,
-                           "function '%s' does not return from all code paths", f->name);
-          }
+        if (f->f_info->ret_type != VOID && !definitely_returns(body->l)) {
+          semantic_error(analyzer, &c->declaration_location,
+                         "function '%s' does not return from all code paths", f->name);
         }
 
         analyzer->current_function = previous_function;
@@ -150,6 +160,17 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
     case AST_FCALL: {
       typecheck_fcall(analyzer, ast);
       break;
+    }
+    case AST_IF:
+    case AST_WHILE: {
+      TYPE condition_type = expr_type(analyzer, ast->l);
+      if (condition_type != TYPE_ERROR && condition_type != BOOL) {
+        semantic_error(analyzer, &ast->tok->loc, "%s condition must have type bool",
+                       ast->type == AST_IF ? "if" : "while");
+      }
+      semanticAnalysis(analyzer, ast->r);
+      semanticAnalysis(analyzer, ast->next);
+      return;
     }
     case AST_BLOCK: {
       enter_scope(sts);
@@ -246,7 +267,7 @@ TYPE expr_type(SemanticAnalyzer *analyzer, AST* expr) {
   symtabStack *sts = analyzer->symbols;
   int type;
   if (expr->type == AST_OPERATOR) {
-    type = typecheck_operator(analyzer, expr->l, expr->r);
+    type = typecheck_operator(analyzer, expr);
   }
   else if (expr->type == AST_FCALL) {
     if (!typecheck_fcall(analyzer, expr)) return TYPE_ERROR;
@@ -326,22 +347,57 @@ bool typecheck_assignment(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs) {
   return true;
 }
 
-int typecheck_operator(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs) {
+int typecheck_operator(SemanticAnalyzer *analyzer, AST *op) {
+  AST *lhs = op->l;
+  AST *rhs = op->r;
   int lt = expr_type(analyzer, lhs);
-  int rt = expr_type(analyzer, rhs);
+  if (op->tok->type == T_BANG) {
+    if (lt != TYPE_ERROR && lt != BOOL) {
+      semantic_error(analyzer, &op->tok->loc, "'!' requires a bool operand");
+      return TYPE_ERROR;
+    }
+    return BOOL;
+  }
 
+  int rt = expr_type(analyzer, rhs);
   if (lt == TYPE_ERROR || rt == TYPE_ERROR) return TYPE_ERROR;
+
   if (!matchType(lt, rt)) {
     semantic_error(analyzer, &lhs->tok->loc, "operator operands must have the same type: %s and %s",
                    typeToStr(lt), typeToStr(rt));
     return TYPE_ERROR;
   }
+
   TYPE type = convertType(lt);
-  if (type != INT && type != FLOAT) {
-    semantic_error(analyzer, &lhs->tok->loc, "arithmetic operators require int or float operands");
-    return TYPE_ERROR;
+  switch (op->tok->type) {
+    case T_EQ:
+    case T_NEQ:
+      if (type == STR || type == VOID || type == F) {
+        semantic_error(analyzer, &op->tok->loc, "equality does not support %s operands", typeToStr(type));
+        return TYPE_ERROR;
+      }
+      return BOOL;
+    case T_LT:
+    case T_LE:
+    case T_GT:
+    case T_GE:
+      if (type != INT && type != FLOAT && type != CHAR) {
+        semantic_error(analyzer, &op->tok->loc, "relational operators require int, float, or char operands");
+        return TYPE_ERROR;
+      }
+      return BOOL;
+    case T_AND:
+    case T_OR:
+      if (type != BOOL) {
+        semantic_error(analyzer, &op->tok->loc, "logical operators require bool operands");
+        return TYPE_ERROR;
+      }
+      return BOOL;
+    default:
+      if (type == INT || type == FLOAT) return type;
+      semantic_error(analyzer, &op->tok->loc, "arithmetic operators require int or float operands");
+      return TYPE_ERROR;
   }
-  return type;
 }
 
 SemanticResult* analyzeAST(AST* root, DiagnosticList *diagnostics) {
