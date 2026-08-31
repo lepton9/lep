@@ -1,40 +1,47 @@
 #include "../include/ssair.h"
 #include "../include/analyzer.h"
 
+#include <limits.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct binding {
-  char *source_name;
-  operand value;
-  struct binding *next;
-} binding;
-
-typedef struct version_counter {
-  char *name;
-  unsigned next_version;
-  struct version_counter *next;
-} version_counter;
+#define INVALID_VALUE UINT_MAX
 
 typedef struct {
+  size_t *slots;
+  size_t capacity;
+  size_t count;
+} name_index;
+
+typedef struct {
+  unsigned *values;
+  size_t count;
+} binding_snapshot;
+
+typedef struct {
+  // Module receiving generated functions and diagnostics.
   ssa *ir;
+  // Function currently being lowered.
   function *function;
+  // Basic block that receives newly emitted instructions.
   basic_block *block;
-  // TODO: use hashmap
-  binding *bindings;
-  version_counter *versions;
+  // Index from source names to function->names entries.
+  name_index names;
+  // Current SSA value ID bound to each name, or INVALID_VALUE when unbound.
+  unsigned *bindings;
+  size_t binding_capacity;
+  // Next SSA version number to assign for each name.
+  unsigned *next_versions;
+  size_t next_version_capacity;
+  // Semantic information used to resolve function signatures.
   const SemanticResult *semantic;
+  // ID assigned to the next basic block created for this function.
   unsigned next_block_id;
+  // Whether the current block has emitted a terminator.
   bool terminated;
 } builder;
-
-static char *duplicate_string(const char *source) {
-  size_t length = strlen(source) + 1;
-  char *copy = malloc(length);
-  memcpy(copy, source, length);
-  return copy;
-}
 
 static const token *source_token(const AST *node) {
   if (!node) return NULL;
@@ -59,11 +66,11 @@ static operand none_operand(void) {
   return (operand){.kind = SSA_OPERAND_NONE, .type = VOID};
 }
 
-static operand value_operand(const char *name, unsigned version, TYPE type) {
+static operand value_operand(unsigned id, TYPE type) {
   return (operand){
       .kind = SSA_OPERAND_VALUE,
       .type = type,
-      .data.value = {.name = duplicate_string(name), .version = version},
+      .data.value = {.id = id},
   };
 }
 
@@ -84,32 +91,24 @@ static operand char_operand(unsigned char value) {
 }
 
 static operand string_operand(const char *value) {
-  return (operand){.kind = SSA_OPERAND_STRING, .type = STR, .data.string_value = duplicate_string(value)};
+  return (operand){.kind = SSA_OPERAND_STRING, .type = STR, .data.string_value = strdup(value)};
 }
 
-// Returns an owned copy of the operand.
 static operand copy_operand(operand source) {
   operand copy = source;
-  if (source.kind == SSA_OPERAND_VALUE) copy.data.value.name = duplicate_string(source.data.value.name);
-  if (source.kind == SSA_OPERAND_STRING) copy.data.string_value = duplicate_string(source.data.string_value);
+  if (source.kind == SSA_OPERAND_STRING) copy.data.string_value = strdup(source.data.string_value);
   return copy;
 }
 
 static void free_operand(operand operand_value) {
-  if (operand_value.kind == SSA_OPERAND_VALUE) free(operand_value.data.value.name);
   if (operand_value.kind == SSA_OPERAND_STRING) free(operand_value.data.string_value);
-}
-
-char *var_name(const char *name, unsigned version) {
-  int length = snprintf(NULL, 0, "%s.%u", name, version);
-  char *result = malloc((size_t)length + 1);
-  snprintf(result, (size_t)length + 1, "%s.%u", name, version);
-  return result;
 }
 
 static basic_block *create_block(unsigned id) {
   basic_block *block = calloc(1, sizeof(*block));
   block->id = id;
+  array_list_init(&block->successors, sizeof(basic_block *));
+  array_list_init(&block->predecessors, sizeof(basic_block *));
   return block;
 }
 
@@ -129,86 +128,160 @@ static instruction *append_instruction(builder *build, opcode op, operand dest,
 
 // Builds a call instruction.
 static instruction *append_call(builder *build, const char *callee, operand dest,
-                                operand *args, size_t arg_count) {
+                                ArrayList *args) {
   instruction *instruction_value = append_instruction(build, OP_CALL, dest,
-                                                       none_operand(), none_operand());
-  instruction_value->data.call.callee = duplicate_string(callee);
-  instruction_value->data.call.arg_count = arg_count;
-  if (arg_count) {
-    instruction_value->data.call.args = calloc(arg_count, sizeof(*instruction_value->data.call.args));
-    for (size_t index = 0; index < arg_count; index++) {
-      instruction_value->data.call.args[index] = copy_operand(args[index]);
-    }
-  }
+                                                        none_operand(), none_operand());
+  instruction_value->data.call.callee = strdup(callee);
+  instruction_value->data.call.arg_count = args->count;
+  instruction_value->data.call.args = args->data;
+  *args = (ArrayList){0};
   return instruction_value;
 }
 
-static binding *lookup_binding_in(binding *bindings, const char *name) {
-  for (binding *current = bindings; current; current = current->next) {
-    if (strcmp(current->source_name, name) == 0) return current;
+static uint64_t hash_name(const char *name) {
+  uint64_t hash = 5381;
+  for (unsigned char character; (character = (unsigned char)*name++);) {
+    hash = (hash << 5) + hash + character;
   }
-  return NULL;
+  return hash;
 }
 
-
-static binding *lookup_binding(builder *build, const char *name) {
-  return lookup_binding_in(build->bindings, name);
+static void grow_array(void **items, size_t *capacity, size_t required, size_t item_size) {
+  if (*capacity >= required) return;
+  size_t new_capacity = *capacity ? *capacity : 4;
+  while (new_capacity < required) new_capacity *= 2;
+  *items = realloc(*items, new_capacity * item_size);
+  *capacity = new_capacity;
 }
 
-static unsigned next_version(builder *build, const char *name) {
-  for (version_counter *current = build->versions; current; current = current->next) {
-    if (strcmp(current->name, name) == 0) return current->next_version++;
-  }
+static inline ssa_name *names_data(function *function_value) {
+  return function_value->names.data;
+}
 
-  version_counter *counter = calloc(1, sizeof(*counter));
-  counter->name = duplicate_string(name);
-  counter->next_version = 1;
-  counter->next = build->versions;
-  build->versions = counter;
-  return 0;
+static inline const ssa_name *names_data_const(const function *function_value) {
+  return function_value->names.data;
+}
+
+static inline const value_info *values_data_const(const function *function_value) {
+  return function_value->values.data;
+}
+
+static void rehash_names(builder *build, size_t capacity) {
+  size_t *slots = calloc(capacity, sizeof(*slots));
+  for (size_t index = 0; index < build->function->names.count; index++) {
+    size_t slot = hash_name(names_data_const(build->function)[index].name) % capacity;
+    while (slots[slot]) slot = (slot + 1) % capacity;
+    slots[slot] = index + 1;
+  }
+  free(build->names.slots);
+  build->names.slots = slots;
+  build->names.capacity = capacity;
+}
+
+static bool lookup_name(const builder *build, const char *name, size_t *index) {
+  if (!build->names.capacity) return false;
+  size_t slot = hash_name(name) % build->names.capacity;
+  while (build->names.slots[slot]) {
+    size_t candidate = build->names.slots[slot] - 1;
+    if (strcmp(names_data_const(build->function)[candidate].name, name) == 0) {
+      *index = candidate;
+      return true;
+    }
+    slot = (slot + 1) % build->names.capacity;
+  }
+  return false;
+}
+
+static size_t intern_name(builder *build, const char *name) {
+  size_t index;
+  if (lookup_name(build, name, &index)) return index;
+  if (!build->names.capacity || (build->names.count + 1) * 2 > build->names.capacity) {
+    rehash_names(build, build->names.capacity ? build->names.capacity * 2 : 16);
+  }
+  grow_array((void **)&build->bindings, &build->binding_capacity,
+             build->function->names.count + 1, sizeof(*build->bindings));
+  grow_array((void **)&build->next_versions, &build->next_version_capacity,
+             build->function->names.count + 1, sizeof(*build->next_versions));
+  index = build->function->names.count;
+  ssa_name entry = {.name = strdup(name)};
+  array_list_push(&build->function->names, &entry);
+  build->bindings[index] = INVALID_VALUE;
+  build->next_versions[index] = 0;
+  size_t slot = hash_name(name) % build->names.capacity;
+  while (build->names.slots[slot]) slot = (slot + 1) % build->names.capacity;
+  build->names.slots[slot] = index + 1;
+  build->names.count++;
+  return index;
+}
+
+static inline operand value_from_id(const function *function_value, unsigned id) {
+  return value_operand(id, values_data_const(function_value)[id].type);
+}
+
+static operand new_value(builder *build, const char *name, TYPE type) {
+  size_t name_index = intern_name(build, name);
+  unsigned id = (unsigned)build->function->values.count;
+  value_info value = {
+      .name_index = (unsigned)name_index,
+      .version = build->next_versions[name_index]++,
+      .type = type,
+  };
+  array_list_push(&build->function->values, &value);
+  return value_operand(id, type);
+}
+
+static bool lookup_binding(const builder *build, const char *name, operand *value) {
+  size_t name_index;
+  if (!lookup_name(build, name, &name_index) || build->bindings[name_index] == INVALID_VALUE) return false;
+  *value = value_from_id(build->function, build->bindings[name_index]);
+  return true;
+}
+
+static bool lookup_binding_at(const builder *build, const binding_snapshot *bindings,
+                              size_t name_index, operand *value) {
+  if (name_index >= bindings->count || bindings->values[name_index] == INVALID_VALUE) return false;
+  *value = value_from_id(build->function, bindings->values[name_index]);
+  return true;
 }
 
 static void bind_value(builder *build, const char *name, operand value) {
-  binding *binding_value = lookup_binding(build, name);
-  if (binding_value) {
-    free_operand(binding_value->value);
-    binding_value->value = copy_operand(value);
-    return;
-  }
-
-  binding_value = calloc(1, sizeof(*binding_value));
-  binding_value->source_name = duplicate_string(name);
-  binding_value->value = copy_operand(value);
-  binding_value->next = build->bindings;
-  build->bindings = binding_value;
+  size_t name_index = intern_name(build, name);
+  build->bindings[name_index] = value.data.value.id;
 }
 
-static binding *copy_bindings(const binding *source) {
-  binding *result = NULL;
-  for (const binding *current = source; current; current = current->next) {
-    binding *copy = calloc(1, sizeof(*copy));
-    copy->source_name = duplicate_string(current->source_name);
-    copy->value = copy_operand(current->value);
-    copy->next = result;
-    result = copy;
+static binding_snapshot copy_bindings(const builder *build) {
+  binding_snapshot result = {.count = build->function->names.count};
+  if (result.count) {
+    result.values = malloc(result.count * sizeof(*result.values));
+    memcpy(result.values, build->bindings, result.count * sizeof(*result.values));
   }
   return result;
 }
 
-static void free_bindings(binding *bindings) {
-  while (bindings) {
-    binding *next = bindings->next;
-    free(bindings->source_name);
-    free_operand(bindings->value);
-    free(bindings);
-    bindings = next;
+static void restore_bindings(builder *build, const binding_snapshot *snapshot) {
+  grow_array((void **)&build->bindings, &build->binding_capacity,
+             build->function->names.count, sizeof(*build->bindings));
+  memcpy(build->bindings, snapshot->values, snapshot->count * sizeof(*build->bindings));
+  for (size_t index = snapshot->count; index < build->function->names.count; index++) {
+    build->bindings[index] = INVALID_VALUE;
   }
 }
 
+static void free_bindings(binding_snapshot *bindings) {
+  free(bindings->values);
+  bindings->values = NULL;
+  bindings->count = 0;
+}
+
+static void free_builder_storage(builder *build) {
+  free(build->names.slots);
+  free(build->bindings);
+  free(build->next_versions);
+}
+
 static void append_block(function *function_value, basic_block *block) {
-  basic_block *last = function_value->blocks;
-  while (last->next) last = last->next;
-  last->next = block;
+  function_value->last_block->next = block;
+  function_value->last_block = block;
 }
 
 static basic_block *new_block(builder *build) {
@@ -218,10 +291,20 @@ static basic_block *new_block(builder *build) {
 }
 
 static void link_blocks(basic_block *from, basic_block *to) {
-  from->successors = realloc(from->successors, (from->successor_count + 1) * sizeof(*from->successors));
-  from->successors[from->successor_count++] = to;
-  to->predecessors = realloc(to->predecessors, (to->predecessor_count + 1) * sizeof(*to->predecessors));
-  to->predecessors[to->predecessor_count++] = from;
+  array_list_push(&from->successors, &to);
+  array_list_push(&to->predecessors, &from);
+}
+
+static inline basic_block *predecessor_at(const basic_block *block, size_t index) {
+  return *(basic_block *const *)array_list_get_const(&block->predecessors, index);
+}
+
+static inline operand *parameter_at(function *function_value, size_t index) {
+  return array_list_get(&function_value->params, index);
+}
+
+static inline const operand *parameter_at_const(const function *function_value, size_t index) {
+  return array_list_get_const(&function_value->params, index);
 }
 
 static void emit_branch(builder *build, basic_block *target) {
@@ -259,9 +342,7 @@ static bool same_operand(operand left, operand right) {
   if (left.kind != right.kind || left.type != right.type) return false;
   switch (left.kind) {
     case SSA_OPERAND_NONE: return true;
-    case SSA_OPERAND_VALUE:
-      return left.data.value.version == right.data.value.version &&
-             strcmp(left.data.value.name, right.data.value.name) == 0;
+    case SSA_OPERAND_VALUE: return left.data.value.id == right.data.value.id;
     case SSA_OPERAND_INT: return left.data.int_value == right.data.int_value;
     case SSA_OPERAND_FLOAT: return left.data.float_value == right.data.float_value;
     case SSA_OPERAND_BOOL: return left.data.bool_value == right.data.bool_value;
@@ -320,35 +401,33 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
     return none_operand();
   }
 
-  operand *args = NULL;
-  size_t arg_count = 0;
+  ArrayList args;
+  array_list_init(&args, sizeof(operand));
   for (AST *argument = call->r->l; argument && build->ir->valid; argument = argument->next) {
-    args = realloc(args, (arg_count + 1) * sizeof(*args));
-    args[arg_count] = emit_expression(build, argument, NULL);
+    operand argument_value = emit_expression(build, argument, NULL);
     if (build->ir->valid &&
-        (arg_count >= signature->n_params ||
-         args[arg_count].type != signature->params[arg_count].type)) {
+        (args.count >= signature->n_params ||
+         argument_value.type != signature->params[args.count].type)) {
       set_error(build->ir, argument, "call to '%s' has an incompatible argument", callee);
     }
-    arg_count++;
+    array_list_push(&args, &argument_value);
   }
-  if (build->ir->valid && arg_count != signature->n_params) {
+  if (build->ir->valid && args.count != signature->n_params) {
     set_error(build->ir, call->l, "call to '%s' has the wrong number of arguments", callee);
   }
   if (!build->ir->valid) {
-    for (size_t index = 0; index < arg_count; index++) free_operand(args[index]);
-    free(args);
+    for (size_t index = 0; index < args.count; index++) {
+      free_operand(*(operand *)array_list_get(&args, index));
+    }
+    array_list_free(&args);
     return none_operand();
   }
 
   operand result = none_operand();
   if (signature->ret_type != VOID) {
-    result = target ? copy_operand(*target) :
-        value_operand("tmp", next_version(build, "tmp"), signature->ret_type);
+    result = target ? copy_operand(*target) : new_value(build, "tmp", signature->ret_type);
   }
-  append_call(build, callee, result, args, arg_count);
-  for (size_t index = 0; index < arg_count; index++) free_operand(args[index]);
-  free(args);
+  append_call(build, callee, result, &args);
   return result;
 }
 
@@ -361,12 +440,12 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
   }
 
   if (expression->type == AST_ID) {
-    binding *binding_value = lookup_binding(build, expression->tok->value);
-    if (!binding_value) {
+    operand value;
+    if (!lookup_binding(build, expression->tok->value, &value)) {
       set_error(build->ir, expression, "no SSA value is available for '%s'", expression->tok->value);
       return none_operand();
     }
-    return copy_operand(binding_value->value);
+    return value;
   }
 
   if (expression->type == AST_FCALL) return emit_call(build, expression, target);
@@ -398,8 +477,7 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 
       build->block = merge_block;
       build->terminated = false;
-      operand result = target ? copy_operand(*target) :
-          value_operand("tmp", next_version(build, "tmp"), BOOL);
+      operand result = target ? copy_operand(*target) : new_value(build, "tmp", BOOL);
       operand values[2] = {bool_operand(expression_type == T_OR), right};
       basic_block *blocks[2] = {decision, right_end};
       emit_phi(build, result, values, blocks, 2);
@@ -422,8 +500,7 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
         free_operand(lhs);
         return none_operand();
       }
-      operand result = target ? copy_operand(*target) :
-          value_operand("tmp", next_version(build, "tmp"), BOOL);
+      operand result = target ? copy_operand(*target) : new_value(build, "tmp", BOOL);
       append_instruction(build, OP_NOT, result, lhs, none_operand());
       free_operand(lhs);
       return result;
@@ -456,8 +533,7 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
     TYPE result_type = expression_type == T_EQ || expression_type == T_NEQ ||
                        expression_type == T_LT || expression_type == T_LE ||
                        expression_type == T_GT || expression_type == T_GE ? BOOL : lhs.type;
-    operand result = target ? copy_operand(*target) :
-        value_operand("tmp", next_version(build, "tmp"), result_type);
+    operand result = target ? copy_operand(*target) : new_value(build, "tmp", result_type);
     append_instruction(build, operation, result, lhs, rhs);
     free_operand(lhs);
     free_operand(rhs);
@@ -471,15 +547,15 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 // Creates the next version of an assigned variable and updates its current binding.
 static void emit_assignment(builder *build, AST *assignment, TYPE declared_type) {
   const char *name = assignment->l->tok->value;
-  binding *previous = lookup_binding(build, name);
+  operand previous;
   TYPE type = declared_type;
-  if (type == VOID && previous) type = previous->value.type;
+  if (type == VOID && lookup_binding(build, name, &previous)) type = previous.type;
   if (!is_value_type(type)) {
     set_error(build->ir, assignment->l, "SSA cannot assign values to '%s' of type %s", name, typeToStr(type));
     return;
   }
 
-  operand destination = value_operand(name, next_version(build, name), type);
+  operand destination = new_value(build, name, type);
   operand result = emit_expression(build, assignment->r, &destination);
   if (!build->ir->valid) {
     free_operand(destination);
@@ -492,9 +568,7 @@ static void emit_assignment(builder *build, AST *assignment, TYPE declared_type)
     free_operand(result);
     return;
   }
-  if (result.kind != SSA_OPERAND_VALUE ||
-      strcmp(result.data.value.name, destination.data.value.name) != 0 ||
-      result.data.value.version != destination.data.value.version) {
+  if (result.kind != SSA_OPERAND_VALUE || result.data.value.id != destination.data.value.id) {
     append_instruction(build, OP_COPY, destination, result, none_operand());
   }
   bind_value(build, name, destination);
@@ -511,8 +585,7 @@ static void emit_if(builder *build, AST *statement) {
     free_operand(condition);
     return;
   }
-  binding *incoming = build->bindings;
-  build->bindings = NULL;
+  binding_snapshot incoming = copy_bindings(build);
   basic_block *then_block = new_block(build);
   basic_block *else_block = new_block(build);
   basic_block *merge_block = new_block(build);
@@ -522,9 +595,9 @@ static void emit_if(builder *build, AST *statement) {
   // Then branch
   build->block = then_block;
   build->terminated = false;
-  build->bindings = copy_bindings(incoming);
+  restore_bindings(build, &incoming);
   emit_statement(build, statement->r);
-  binding *then_bindings = build->bindings;
+  binding_snapshot then_bindings = copy_bindings(build);
   basic_block *then_end = build->block;
   bool then_reaches_merge = !then_end->terminated;
   if (then_reaches_merge) emit_branch(build, merge_block);
@@ -532,10 +605,10 @@ static void emit_if(builder *build, AST *statement) {
   // Else branch
   build->block = else_block;
   build->terminated = false;
-  build->bindings = copy_bindings(incoming);
+  restore_bindings(build, &incoming);
   AST *else_statement = statement->r->next;
   if (else_statement) emit_statement(build, else_statement);
-  binding *else_bindings = build->bindings;
+  binding_snapshot else_bindings = copy_bindings(build);
   basic_block *else_end = build->block;
   bool else_reaches_merge = !else_end->terminated;
   if (else_reaches_merge) emit_branch(build, merge_block);
@@ -543,40 +616,40 @@ static void emit_if(builder *build, AST *statement) {
   // Merge then and else branches
   build->block = merge_block;
   build->terminated = false;
-  build->bindings = copy_bindings(incoming);
-  for (binding *original = incoming; original; original = original->next) {
+  restore_bindings(build, &incoming);
+  for (size_t name_index = 0; name_index < incoming.count; name_index++) {
     // Handle possible variable reassignments from inside the branches
-    binding *then_value = lookup_binding_in(then_bindings, original->source_name);
-    binding *else_value = lookup_binding_in(else_bindings, original->source_name);
-    // The variable defined outside of the blocks was not reassigned in 
+    operand original;
+    operand then_value;
+    operand else_value;
+    if (!lookup_binding_at(build, &incoming, name_index, &original) ||
+        !lookup_binding_at(build, &then_bindings, name_index, &then_value) ||
+        !lookup_binding_at(build, &else_bindings, name_index, &else_value)) continue;
+    // The variable defined outside of the blocks was not reassigned in
     // either of the branches.
-    if (!then_value || !else_value) continue;
-
     if (then_reaches_merge && else_reaches_merge &&
-        !same_operand(then_value->value, else_value->value)) {
+        !same_operand(then_value, else_value)) {
       // Both branches modify the variable
-      operand destination = value_operand(original->source_name,
-                                          next_version(build, original->source_name),
-                                          original->value.type);
-      operand values[2] = {then_value->value, else_value->value};
+      const char *name = names_data_const(build->function)[name_index].name;
+      operand destination = new_value(build, name, original.type);
+      operand values[2] = {then_value, else_value};
       basic_block *blocks[2] = {then_end, else_end};
       emit_phi(build, destination, values, blocks, 2);
-      bind_value(build, original->source_name, destination);
+      bind_value(build, name, destination);
       free_operand(destination);
     } else if (then_reaches_merge && !else_reaches_merge) {
-      bind_value(build, original->source_name, then_value->value);
+      bind_value(build, names_data_const(build->function)[name_index].name, then_value);
     } else if (!then_reaches_merge && else_reaches_merge) {
-      bind_value(build, original->source_name, else_value->value);
+      bind_value(build, names_data_const(build->function)[name_index].name, else_value);
     }
   }
-  free_bindings(incoming);
-  free_bindings(then_bindings);
-  free_bindings(else_bindings);
+  free_bindings(&incoming);
+  free_bindings(&then_bindings);
+  free_bindings(&else_bindings);
 }
 
 static void emit_while(builder *build, AST *statement) {
-  binding *incoming = build->bindings;
-  build->bindings = NULL;
+  binding_snapshot incoming = copy_bindings(build);
   basic_block *header = new_block(build);
   basic_block *body = new_block(build);
   basic_block *exit = new_block(build);
@@ -584,44 +657,48 @@ static void emit_while(builder *build, AST *statement) {
 
   build->block = header;
   build->terminated = false;
-  build->bindings = copy_bindings(incoming);
-  for (binding *original = incoming; original; original = original->next) {
-    operand destination = value_operand(original->source_name,
-                                        next_version(build, original->source_name),
-                                        original->value.type);
-    operand values[2] = {original->value, none_operand()};
-    basic_block *blocks[2] = {header->predecessors[0], NULL};
+  restore_bindings(build, &incoming);
+  for (size_t name_index = 0; name_index < incoming.count; name_index++) {
+    operand original;
+    if (!lookup_binding_at(build, &incoming, name_index, &original)) continue;
+    const char *name = names_data_const(build->function)[name_index].name;
+    operand destination = new_value(build, name, original.type);
+    operand values[2] = {original, none_operand()};
+    basic_block *blocks[2] = {predecessor_at(header, 0), NULL};
     emit_phi(build, destination, values, blocks, 2);
-    bind_value(build, original->source_name, destination);
+    bind_value(build, name, destination);
     free_operand(destination);
   }
   operand condition = emit_expression(build, statement->l, NULL);
   if (build->ir->valid && condition.type == BOOL) emit_conditional_branch(build, condition, body, exit);
   else if (build->ir->valid) set_error(build->ir, statement->l, "while condition must have bool SSA type");
   free_operand(condition);
-  binding *header_bindings = copy_bindings(build->bindings);
+  binding_snapshot header_bindings = copy_bindings(build);
 
   build->block = body;
   build->terminated = false;
   emit_statement(build, statement->r);
-  binding *body_bindings = build->bindings;
+  binding_snapshot body_bindings = copy_bindings(build);
   basic_block *body_end = build->block;
   // Infinite while loop
   if (!body_end->terminated) emit_branch(build, header);
 
   for (instruction *instruction_value = header->first; instruction_value &&
        instruction_value->op == OP_PHI; instruction_value = instruction_value->next) {
-    binding *body_value = lookup_binding_in(body_bindings, instruction_value->dest.data.value.name);
-    if (!body_value) body_value = lookup_binding_in(incoming, instruction_value->dest.data.value.name);
+    size_t name_index = values_data_const(build->function)[instruction_value->dest.data.value.id].name_index;
+    operand body_value;
+    if (!lookup_binding_at(build, &body_bindings, name_index, &body_value) &&
+        !lookup_binding_at(build, &incoming, name_index, &body_value)) continue;
     free_operand(instruction_value->data.phi.entries[1].value);
-    instruction_value->data.phi.entries[1].value = copy_operand(body_value->value);
+    instruction_value->data.phi.entries[1].value = copy_operand(body_value);
     instruction_value->data.phi.entries[1].block = body_end;
   }
   build->block = exit;
   build->terminated = false;
-  build->bindings = header_bindings;
-  free_bindings(incoming);
-  free_bindings(body_bindings);
+  restore_bindings(build, &header_bindings);
+  free_bindings(&incoming);
+  free_bindings(&header_bindings);
+  free_bindings(&body_bindings);
 }
 
 static void emit_statement(builder *build, AST *statement) {
@@ -686,8 +763,11 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
   AST *params_node = name_node->next;
   function *function_value = calloc(1, sizeof(*function_value));
   builder build = {.ir = ir, .function = function_value, .semantic = semantic};
+  array_list_init(&function_value->params, sizeof(operand));
+  array_list_init(&function_value->values, sizeof(value_info));
+  array_list_init(&function_value->names, sizeof(ssa_name));
 
-  function_value->name = duplicate_string(name_node->tok->value);
+  function_value->name = strdup(name_node->tok->value);
   stEntry *function_symbol = lookup_function(&build, function_value->name);
   if (!function_symbol || !function_symbol->f_info) {
     set_error(ir, name_node, "no semantic function signature is available for '%s'", function_value->name);
@@ -697,26 +777,24 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
   build.block = create_block(build.next_block_id++);
   function_value->entry_block = build.block;
   function_value->blocks = build.block;
+  function_value->last_block = build.block;
 
   for (AST *parameter = params_node->l; parameter; parameter = parameter->next) {
-    if (function_value->param_count >= function_symbol->f_info->n_params) {
+    if (function_value->params.count >= function_symbol->f_info->n_params) {
       set_error(ir, parameter, "semantic parameter count does not match function '%s'", function_value->name);
       break;
     }
-    TYPE parameter_type = function_symbol->f_info->params[function_value->param_count].type;
+    TYPE parameter_type = function_symbol->f_info->params[function_value->params.count].type;
     if (!is_value_type(parameter_type)) {
       set_error(ir, parameter, "SSA parameters must have a value type");
       break;
     }
-    size_t index = function_value->param_count++;
-    function_value->params = realloc(function_value->params,
-                                     function_value->param_count * sizeof(*function_value->params));
     const char *parameter_name = parameter->r->tok->value;
-    function_value->params[index] = value_operand(parameter_name,
-                                                   next_version(&build, parameter_name), parameter_type);
-    bind_value(&build, parameter_name, function_value->params[index]);
+    operand parameter_value = new_value(&build, parameter_name, parameter_type);
+    array_list_push(&function_value->params, &parameter_value);
+    bind_value(&build, parameter_name, parameter_value);
   }
-  if (ir->valid && function_value->param_count != function_symbol->f_info->n_params) {
+  if (ir->valid && function_value->params.count != function_symbol->f_info->n_params) {
     set_error(ir, name_node, "semantic parameter count does not match function '%s'", function_value->name);
   }
   emit_statement_list(&build, ast->r->l);
@@ -728,19 +806,7 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
     }
   }
 
-  while (build.bindings) {
-    binding *next = build.bindings->next;
-    free(build.bindings->source_name);
-    free_operand(build.bindings->value);
-    free(build.bindings);
-    build.bindings = next;
-  }
-  while (build.versions) {
-    version_counter *next = build.versions->next;
-    free(build.versions->name);
-    free(build.versions);
-    build.versions = next;
-  }
+  free_builder_storage(&build);
   return function_value;
 }
 
@@ -754,7 +820,7 @@ static global_var *emit_global(ssa *ir, AST *ast) {
     set_error(ir, identifier, "SSA globals must have a value type");
     return global;
   }
-  global->name = duplicate_string(identifier->tok->value);
+  global->name = strdup(identifier->tok->value);
   global->type = type;
   if (ast->r->type != AST_ASSIGNMENT) return global;
 
@@ -830,12 +896,14 @@ static const char *opcode_name(opcode op) {
   return "invalid";
 }
 
-static void print_operand(FILE *out, operand operand_value) {
+static void print_operand(FILE *out, const function *function_value, operand operand_value) {
   switch (operand_value.kind) {
     case SSA_OPERAND_NONE: fputs("void", out); break;
-    case SSA_OPERAND_VALUE:
-      fprintf(out, "%%%s.%u", operand_value.data.value.name, operand_value.data.value.version);
+    case SSA_OPERAND_VALUE: {
+      const value_info *value = &values_data_const(function_value)[operand_value.data.value.id];
+      fprintf(out, "%%%s.%u", names_data_const(function_value)[value->name_index].name, value->version);
       break;
+    }
     case SSA_OPERAND_INT: fprintf(out, "%ld", operand_value.data.int_value); break;
     case SSA_OPERAND_FLOAT: fprintf(out, "%g", operand_value.data.float_value); break;
     case SSA_OPERAND_BOOL: fputs(operand_value.data.bool_value ? "true" : "false", out); break;
@@ -852,17 +920,18 @@ void print_ssair(FILE *out, const ssa *ir) {
       fprintf(out, "global %s @%s", typeToStr(global->type), global->name);
       if (global->has_initializer) {
         fputs(" = ", out);
-        print_operand(out, global->initializer);
+        print_operand(out, NULL, global->initializer);
       }
       fputc('\n', out);
       continue;
     }
     const function *function_value = node->value.function;
     fprintf(out, "function %s(", function_value->name);
-    for (size_t index = 0; index < function_value->param_count; index++) {
+    for (size_t index = 0; index < function_value->params.count; index++) {
       if (index) fputs(", ", out);
-      fprintf(out, "%s ", typeToStr(function_value->params[index].type));
-      print_operand(out, function_value->params[index]);
+      const operand *parameter = parameter_at_const(function_value, index);
+      fprintf(out, "%s ", typeToStr(parameter->type));
+      print_operand(out, function_value, *parameter);
     }
     fprintf(out, ") -> %s {\n", typeToStr(function_value->return_type));
     for (const basic_block *block = function_value->blocks; block; block = block->next) {
@@ -871,27 +940,27 @@ void print_ssair(FILE *out, const ssa *ir) {
            instruction_value = instruction_value->next) {
         fputs("    ", out);
         if (instruction_value->op != OP_RET && instruction_value->dest.kind != SSA_OPERAND_NONE) {
-          print_operand(out, instruction_value->dest);
+          print_operand(out, function_value, instruction_value->dest);
           fputs(" = ", out);
         }
         fputs(opcode_name(instruction_value->op), out);
         if (instruction_value->op == OP_RET) {
           if (instruction_value->data.operands.src1.kind != SSA_OPERAND_NONE) {
             fputc(' ', out);
-            print_operand(out, instruction_value->data.operands.src1);
+            print_operand(out, function_value, instruction_value->data.operands.src1);
           }
         } else if (instruction_value->op == OP_CALL) {
           fprintf(out, " @%s(", instruction_value->data.call.callee);
           for (size_t index = 0; index < instruction_value->data.call.arg_count; index++) {
             if (index) fputs(", ", out);
-            print_operand(out, instruction_value->data.call.args[index]);
+            print_operand(out, function_value, instruction_value->data.call.args[index]);
           }
           fputc(')', out);
         } else if (instruction_value->op == OP_BR) {
           fprintf(out, " block.%u", instruction_value->data.branch.target->id);
         } else if (instruction_value->op == OP_CBR) {
           fputc(' ', out);
-          print_operand(out, instruction_value->data.conditional_branch.condition);
+          print_operand(out, function_value, instruction_value->data.conditional_branch.condition);
           fprintf(out, ", block.%u, block.%u", instruction_value->data.conditional_branch.true_target->id,
                   instruction_value->data.conditional_branch.false_target->id);
         } else if (instruction_value->op == OP_PHI) {
@@ -899,15 +968,15 @@ void print_ssair(FILE *out, const ssa *ir) {
           for (size_t index = 0; index < instruction_value->data.phi.count; index++) {
             if (index) fputs(", ", out);
             fputc('[', out);
-            print_operand(out, instruction_value->data.phi.entries[index].value);
+            print_operand(out, function_value, instruction_value->data.phi.entries[index].value);
             fprintf(out, ", block.%u]", instruction_value->data.phi.entries[index].block->id);
           }
         } else {
           fputc(' ', out);
-          print_operand(out, instruction_value->data.operands.src1);
+          print_operand(out, function_value, instruction_value->data.operands.src1);
           if (instruction_value->data.operands.src2.kind != SSA_OPERAND_NONE) {
             fputs(", ", out);
-            print_operand(out, instruction_value->data.operands.src2);
+            print_operand(out, function_value, instruction_value->data.operands.src2);
           }
         }
         fputc('\n', out);
@@ -965,15 +1034,20 @@ void free_ssair(ssa *ir) {
       function *function_value = node->value.function;
       if (function_value) {
         free(function_value->name);
-        for (size_t index = 0; index < function_value->param_count; index++) {
-          free_operand(function_value->params[index]);
+        for (size_t index = 0; index < function_value->params.count; index++) {
+          free_operand(*parameter_at(function_value, index));
         }
-        free(function_value->params);
+        array_list_free(&function_value->params);
+        array_list_free(&function_value->values);
+        for (size_t index = 0; index < function_value->names.count; index++) {
+          free(names_data(function_value)[index].name);
+        }
+        array_list_free(&function_value->names);
         for (basic_block *block = function_value->blocks; block;) {
           basic_block *next_block = block->next;
           free_instruction_list(block->first);
-          free(block->successors);
-          free(block->predecessors);
+          array_list_free(&block->successors);
+          array_list_free(&block->predecessors);
           free(block);
           block = next_block;
         }

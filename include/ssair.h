@@ -6,6 +6,7 @@
 
 #include "ast.h"
 #include "analyzer.h"
+#include "array_list.h"
 #include "symtab.h"
 #include "diagnostic.h"
 
@@ -44,12 +45,21 @@ typedef enum {
 } operand_type;
 
 typedef struct {
+  char *name;
+} ssa_name;
+
+typedef struct {
+  unsigned name_index;
+  unsigned version;
+  TYPE type;
+} value_info;
+
+typedef struct {
   operand_type kind;
   TYPE type;
   union {
     struct {
-      char *name;
-      unsigned version;
+      unsigned id;
     } value;
     long int_value;
     double float_value;
@@ -97,10 +107,8 @@ typedef struct basic_block {
   unsigned id;
   instruction *first;
   instruction *last;
-  struct basic_block **successors;
-  size_t successor_count;
-  struct basic_block **predecessors;
-  size_t predecessor_count;
+  ArrayList successors;
+  ArrayList predecessors;
   bool terminated;
   struct basic_block *next;
 } basic_block;
@@ -115,10 +123,17 @@ typedef struct {
 typedef struct {
   char *name;
   TYPE return_type;
-  operand *params;
-  size_t param_count;
+  ArrayList params;
+  // List of values inside the function.
+  ArrayList values;
+  // List of names for the values.
+  ArrayList names;
+  // First block of the function.
   basic_block *entry_block;
+  // All the blocks of the function.
   basic_block *blocks;
+  // Last block of the function.
+  basic_block *last_block;
 } function;
 
 typedef enum {
@@ -146,8 +161,5 @@ typedef struct {
 ssa *generate_ssair(AST *root, const SemanticResult *semantic, DiagnosticList *diagnostics);
 void print_ssair(FILE *out, const ssa *ir);
 void free_ssair(ssa *ir);
-
-// Returns an owned SSA identifier.
-char *var_name(const char *name, unsigned version);
 
 #endif
