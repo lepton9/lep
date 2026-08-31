@@ -1,18 +1,5 @@
 #include "../include/token.h"
-#include <stdlib.h>
 #include <stdio.h>
-
-token *makeToken(const tokenType type, const char *value, const cLoc codeLoc) {
-  token *tok = malloc(sizeof(token));
-  *tok = (token){type, (char*)value, codeLoc};
-  return tok;
-}
-
-void freeToken(token *tok) {
-  if (tok == NULL) return;
-  free(tok->value);
-  free(tok);
-}
 
 const char* tokenTypeToStr(tokenType type) {
   switch (type) {
@@ -106,5 +93,6 @@ const char* tokenTypeToStr(tokenType type) {
 
 
 void printToken(token *tok) {
-  printf("%-13s %-10s L%-2d C%d\n", tokenTypeToStr(tok->type), tok->value, tok->loc.line, tok->loc.column);
+  printf("%-13s %.*s L%-2d C%d\n", tokenTypeToStr(tok->type), tok->length,
+         tok->start, tok->loc.line, tok->loc.column);
 }

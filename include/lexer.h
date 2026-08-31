@@ -1,7 +1,6 @@
 #ifndef LEXER_H
 #define LEXER_H
 
-#include "../include/LList.h"
 #include "../include/token.h"
 #include "../include/diagnostic.h"
 #include <stdbool.h>
@@ -10,7 +9,6 @@
 #define COMMENT_CHAR '#'
 
 typedef struct {
-  LList *tokens;
   char *src;
   int srcLen;
   int srcPos;
@@ -18,21 +16,25 @@ typedef struct {
   DiagnosticList *diagnostics;
 } Lexer;
 
-Lexer *initLexer(DiagnosticList *diagnostics);
-void freeLexer(Lexer *lexer);
+Lexer *init_lexer(DiagnosticList *diagnostics);
+void free_lexer(Lexer *lexer);
 
-LList* lex(Lexer *lexer); // Tokenize
+token next_token(Lexer *lexer);
 
-token *getNextToken(Lexer *lexer);
-void addToken(Lexer *lexer, token *token);
-bool atEnd(Lexer *lexer);
-char peek(Lexer *lexer);
-char advance(Lexer *lexer);
-void nextLine(Lexer *lexer);
-token* makeTokenN(Lexer *lexer, const tokenType type, const int beg, const cLoc cl);
+static inline bool at_end(const Lexer *lexer) {
+  return lexer->srcPos >= lexer->srcLen;
+}
 
-void printTokens(Lexer *lexer);
+static inline char peek(const Lexer *lexer) {
+  return at_end(lexer) ? '\0' : lexer->src[lexer->srcPos];
+}
 
-char* malStrncpy(const char *s, const size_t n);
+static inline char advance(Lexer *lexer) {
+  if (at_end(lexer)) return '\0';
+  lexer->codeLoc.column++;
+  return lexer->src[lexer->srcPos++];
+}
+
+void next_line(Lexer *lexer);
 
 #endif

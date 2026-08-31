@@ -16,7 +16,6 @@ lc *initLC();
 void freeLC(lc *lc);
 
 bool readSrcFile(const char *fileName, char **buffer, int *length);
-void lclex(lc *lc);
 void lcparse(lc *lc);
 bool lccompile(lc *lc);
 

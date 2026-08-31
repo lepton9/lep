@@ -45,9 +45,13 @@ typedef struct {
 
 static const token *source_token(const AST *node) {
   if (!node) return NULL;
-  if (node->tok) return node->tok;
+  if (node->has_token) return &node->token;
   const token *left = source_token(node->l);
   return left ? left : source_token(node->r);
+}
+
+static char *token_cstr(const token *tok) {
+  return strndup(tok->start, (size_t)tok->length);
 }
 
 static void set_error(ssa *ir, const AST *node, const char *format, ...) {
@@ -90,8 +94,9 @@ static operand char_operand(unsigned char value) {
   return (operand){.kind = SSA_OPERAND_CHAR, .type = CHAR, .data.char_value = value};
 }
 
-static operand string_operand(const char *value) {
-  return (operand){.kind = SSA_OPERAND_STRING, .type = STR, .data.string_value = strdup(value)};
+static operand string_operand(const token *value) {
+  return (operand){.kind = SSA_OPERAND_STRING, .type = STR,
+                   .data.string_value = strndup(value->start, (size_t)value->length)};
 }
 
 static operand copy_operand(operand source) {
@@ -354,7 +359,7 @@ static bool same_operand(operand left, operand right) {
 }
 
 static TYPE ast_type(const AST *type_node) {
-  return type_node && type_node->tok ? convertType(type_node->tok->type) : VOID;
+  return type_node && type_node->has_token ? convertType(type_node->token.type) : VOID;
 }
 
 static bool is_value_type(TYPE type) {
@@ -368,17 +373,18 @@ static stEntry *lookup_function(builder *build, const char *name) {
 }
 
 static operand literal_operand(builder *build, AST *expression) {
-  switch (expression->tok->type) {
+  switch (expression->token.type) {
     case T_LIT_INT:
-      return int_operand(strtol(expression->tok->value, NULL, 10));
+      return int_operand(strtol(expression->token.start, NULL, 10));
     case T_LIT_FLOAT:
-      return float_operand(strtod(expression->tok->value, NULL));
+      return float_operand(strtod(expression->token.start, NULL));
     case T_LIT_BOOL:
-      return bool_operand(strcmp(expression->tok->value, "true") == 0);
+      return bool_operand(expression->token.length == 4 &&
+                          memcmp(expression->token.start, "true", 4) == 0);
     case T_LIT_CHAR:
-      return char_operand((unsigned char)expression->tok->value[1]);
+      return char_operand((unsigned char)expression->token.start[1]);
     case T_LIT_STR:
-      return string_operand(expression->tok->value);
+      return string_operand(&expression->token);
     default:
       set_error(build->ir, expression, "unsupported literal in SSA generation");
       return none_operand();
@@ -389,15 +395,17 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 
 // Lowers a function call and returns its SSA result.
 static operand emit_call(builder *build, AST *call, const operand *target) {
-  const char *callee = call->l->tok->value;
+  char *callee = token_cstr(&call->l->token);
   stEntry *function_value = lookup_function(build, callee);
   if (!function_value || !function_value->f_info) {
     set_error(build->ir, call->l, "no SSA function signature is available for '%s'", callee);
+    free(callee);
     return none_operand();
   }
   func_info *signature = function_value->f_info;
   if (signature->ret_type == VOID && target) {
     set_error(build->ir, call->l, "void function '%s' cannot be used as an expression", callee);
+    free(callee);
     return none_operand();
   }
 
@@ -420,6 +428,7 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
       free_operand(*(operand *)array_list_get(&args, index));
     }
     array_list_free(&args);
+    free(callee);
     return none_operand();
   }
 
@@ -428,6 +437,7 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
     result = target ? copy_operand(*target) : new_value(build, "tmp", signature->ret_type);
   }
   append_call(build, callee, result, &args);
+  free(callee);
   return result;
 }
 
@@ -441,17 +451,20 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 
   if (expression->type == AST_ID) {
     operand value;
-    if (!lookup_binding(build, expression->tok->value, &value)) {
-      set_error(build->ir, expression, "no SSA value is available for '%s'", expression->tok->value);
+    char *name = token_cstr(&expression->token);
+    if (!lookup_binding(build, name, &value)) {
+      set_error(build->ir, expression, "no SSA value is available for '%s'", name);
+      free(name);
       return none_operand();
     }
+    free(name);
     return value;
   }
 
   if (expression->type == AST_FCALL) return emit_call(build, expression, target);
 
   if (expression->type == AST_OPERATOR) {
-    const tokenType expression_type = expression->tok->type;
+    const tokenType expression_type = expression->token.type;
     if (expression_type == T_AND || expression_type == T_OR) {
       operand left = emit_expression(build, expression->l, NULL);
       if (!build->ir->valid || left.type != BOOL) {
@@ -546,12 +559,13 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 
 // Creates the next version of an assigned variable and updates its current binding.
 static void emit_assignment(builder *build, AST *assignment, TYPE declared_type) {
-  const char *name = assignment->l->tok->value;
+  char *name = token_cstr(&assignment->l->token);
   operand previous;
   TYPE type = declared_type;
   if (type == VOID && lookup_binding(build, name, &previous)) type = previous.type;
   if (!is_value_type(type)) {
     set_error(build->ir, assignment->l, "SSA cannot assign values to '%s' of type %s", name, typeToStr(type));
+    free(name);
     return;
   }
 
@@ -560,12 +574,14 @@ static void emit_assignment(builder *build, AST *assignment, TYPE declared_type)
   if (!build->ir->valid) {
     free_operand(destination);
     free_operand(result);
+    free(name);
     return;
   }
   if (result.type != type) {
     set_error(build->ir, assignment->l, "assignment to '%s' has incompatible SSA types", name);
     free_operand(destination);
     free_operand(result);
+    free(name);
     return;
   }
   if (result.kind != SSA_OPERAND_VALUE || result.data.value.id != destination.data.value.id) {
@@ -574,6 +590,7 @@ static void emit_assignment(builder *build, AST *assignment, TYPE declared_type)
   bind_value(build, name, destination);
   free_operand(destination);
   free_operand(result);
+  free(name);
 }
 
 static void emit_statement_list(builder *build, AST *statement);
@@ -767,7 +784,7 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
   array_list_init(&function_value->values, sizeof(value_info));
   array_list_init(&function_value->names, sizeof(ssa_name));
 
-  function_value->name = strdup(name_node->tok->value);
+  function_value->name = token_cstr(&name_node->token);
   stEntry *function_symbol = lookup_function(&build, function_value->name);
   if (!function_symbol || !function_symbol->f_info) {
     set_error(ir, name_node, "no semantic function signature is available for '%s'", function_value->name);
@@ -789,10 +806,11 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
       set_error(ir, parameter, "SSA parameters must have a value type");
       break;
     }
-    const char *parameter_name = parameter->r->tok->value;
+    char *parameter_name = token_cstr(&parameter->r->token);
     operand parameter_value = new_value(&build, parameter_name, parameter_type);
     array_list_push(&function_value->params, &parameter_value);
     bind_value(&build, parameter_name, parameter_value);
+    free(parameter_name);
   }
   if (ir->valid && function_value->params.count != function_symbol->f_info->n_params) {
     set_error(ir, name_node, "semantic parameter count does not match function '%s'", function_value->name);
@@ -820,7 +838,7 @@ static global_var *emit_global(ssa *ir, AST *ast) {
     set_error(ir, identifier, "SSA globals must have a value type");
     return global;
   }
-  global->name = strdup(identifier->tok->value);
+  global->name = token_cstr(&identifier->token);
   global->type = type;
   if (ast->r->type != AST_ASSIGNMENT) return global;
 

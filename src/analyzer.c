@@ -3,6 +3,10 @@
 #include <stdarg.h>
 #include <string.h>
 
+static char *token_cstr(const token *token) {
+  return strndup(token->start, (size_t)token->length);
+}
+
 static void semantic_error(SemanticAnalyzer *analyzer, const cLoc *location,
                            const char *format, ...) {
   va_list args;
@@ -79,23 +83,26 @@ static void declare_functions(SemanticAnalyzer *analyzer, AST *root) {
     AST *name_node = header->l;
     AST *params_node = name_node->next;
     AST *return_type_node = params_node->next;
-    token *name = name_node->tok;
-    if (lookup_scope(currentScope(analyzer->symbols), name->value)) {
-        semantic_error(analyzer, &name->loc, "redefinition of function '%s'", name->value);
+    token *name = &name_node->token;
+    char *name_value = token_cstr(name);
+    if (lookup_scope(currentScope(analyzer->symbols), name_value)) {
+        semantic_error(analyzer, &name->loc, "redefinition of function '%s'", name_value);
+        free(name_value);
        continue;
     }
-    stEntry *function_value = newVariable(analyzer->symbols, name->value, F);
+    stEntry *function_value = newVariable(analyzer->symbols, name_value, F);
+    free(name_value);
     function_value->declLine = name->loc.line;
     function_value->f_info = calloc(1, sizeof(*function_value->f_info));
-    function_value->f_info->ret_type = convertType(return_type_node->tok->type);
+    function_value->f_info->ret_type = convertType(return_type_node->token.type);
     for (AST *parameter_node = params_node->l; parameter_node;
          parameter_node = parameter_node->next) {
       size_t index = function_value->f_info->n_params++;
       function_value->f_info->params = realloc(function_value->f_info->params,
           function_value->f_info->n_params * sizeof(*function_value->f_info->params));
       function_value->f_info->params[index] = (parameter){
-          parameter_node->r->tok->value,
-          convertType(parameter_node->l->tok->type),
+          token_cstr(&parameter_node->r->token),
+          convertType(parameter_node->l->token.type),
       };
     }
   }
@@ -109,8 +116,10 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
     case AST_FUNCTION: {
       AST* header = ast->l;
       AST* body = ast->r;
-      token* name = header->l->tok;
-      stEntry* f = lookup_scope(currentScope(sts), name->value);
+      token* name = &header->l->token;
+      char *name_value = token_cstr(name);
+      stEntry* f = lookup_scope(currentScope(sts), name_value);
+      free(name_value);
       assert(f && f->type == F && f->f_info);
       enter_scope(sts);
       {
@@ -149,10 +158,10 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
           c->ret_scope = sts->cur_scope;
         }
       } else {
-        semantic_error(analyzer, &ast->tok->loc, "return statement outside of a function");
+        semantic_error(analyzer, &ast->token.loc, "return statement outside of a function");
       }
       if (ret_type != TYPE_ERROR && func_ret_type != TYPE_ERROR && !matchType(ret_type, func_ret_type)) {
-        semantic_error(analyzer, &ast->tok->loc, "wrong return type: expected %s, found %s",
+        semantic_error(analyzer, &ast->token.loc, "wrong return type: expected %s, found %s",
                        typeToStr(func_ret_type), typeToStr(ret_type));
       }
       break;
@@ -165,7 +174,7 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
     case AST_WHILE: {
       TYPE condition_type = expr_type(analyzer, ast->l);
       if (condition_type != TYPE_ERROR && condition_type != BOOL) {
-        semantic_error(analyzer, &ast->tok->loc, "%s condition must have type bool",
+        semantic_error(analyzer, &ast->token.loc, "%s condition must have type bool",
                        ast->type == AST_IF ? "if" : "while");
       }
       semanticAnalysis(analyzer, ast->r);
@@ -182,17 +191,21 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
     case AST_VARIABLE: {
       AST* id = ast->r;
       if (id->type == AST_ASSIGNMENT) id = ast->r->l;
-      if (lookup_all(sts, id->tok->value)) {
-        semantic_error(analyzer, &id->tok->loc, "redefinition of '%s'", id->tok->value);
+      char *id_value = token_cstr(&id->token);
+      if (lookup_all(sts, id_value)) {
+        semantic_error(analyzer, &id->token.loc, "redefinition of '%s'", id_value);
+        free(id_value);
         break;
       }
-      TYPE variable_type = convertType(ast->l->tok->type);
+      TYPE variable_type = convertType(ast->l->token.type);
       if (variable_type == VOID || variable_type == F) {
-        semantic_error(analyzer, &id->tok->loc, "variables cannot have type %s", typeToStr(variable_type));
+        semantic_error(analyzer, &id->token.loc, "variables cannot have type %s", typeToStr(variable_type));
+        free(id_value);
         break;
       }
-      stEntry* var = newVariable(sts, id->tok->value, variable_type);
-      var->declLine = id->tok->loc.line;
+      stEntry* var = newVariable(sts, id_value, variable_type);
+      free(id_value);
+      var->declLine = id->token.loc.line;
 
       if (analyzer->current_function != NULL) {
         context* c = analyzer->current_function;
@@ -221,7 +234,7 @@ void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast) {
 
 // To be deleted
 int funcRetType(AST* f) {
-  return f->l->l->next->next->tok->type;
+  return f->l->l->next->next->token.type;
 }
 
 TYPE convertType(const int type) {
@@ -271,28 +284,33 @@ TYPE expr_type(SemanticAnalyzer *analyzer, AST* expr) {
   }
   else if (expr->type == AST_FCALL) {
     if (!typecheck_fcall(analyzer, expr)) return TYPE_ERROR;
-    char* f_id = expr->l->tok->value;
+    char* f_id = token_cstr(&expr->l->token);
     stEntry* f = lookup_all(sts, f_id);
     type = f->f_info->ret_type;
     if (matchType(type, VOID)) {
-      semantic_error(analyzer, &expr->l->tok->loc,
+      semantic_error(analyzer, &expr->l->token.loc,
                      "void function '%s' cannot be used as an expression", f_id);
+      free(f_id);
       return TYPE_ERROR;
     }
+    free(f_id);
   }
   else if (expr->type == AST_ID) {
-    stEntry* var = lookup_all(sts, expr->tok->value);
+    char *id_value = token_cstr(&expr->token);
+    stEntry* var = lookup_all(sts, id_value);
     if (!var) {
-      semantic_error(analyzer, &expr->tok->loc, "use of undeclared variable '%s'", expr->tok->value);
+      semantic_error(analyzer, &expr->token.loc, "use of undeclared variable '%s'", id_value);
+      free(id_value);
       return TYPE_ERROR;
     }
+    free(id_value);
     if (!var->is_initialized) {
-      semantic_error(analyzer, &expr->tok->loc, "variable '%s' has no assigned value", var->name);
+      semantic_error(analyzer, &expr->token.loc, "variable '%s' has no assigned value", var->name);
       return TYPE_ERROR;
     }
     type = var->type;
   } else {
-    type = expr->tok->type;
+    type = expr->token.type;
   }
   return convertType(type);
 }
@@ -300,26 +318,29 @@ TYPE expr_type(SemanticAnalyzer *analyzer, AST* expr) {
 bool typecheck_fcall(SemanticAnalyzer *analyzer, AST* fcall) {
   symtabStack *sts = analyzer->symbols;
   AST* arg = fcall->r->l;
-  stEntry* f = lookup_all(sts, fcall->l->tok->value);
+  char *name = token_cstr(&fcall->l->token);
+  stEntry* f = lookup_all(sts, name);
   if (!f) {
-    semantic_error(analyzer, &fcall->l->tok->loc, "no function named '%s' found", fcall->l->tok->value);
+    semantic_error(analyzer, &fcall->l->token.loc, "no function named '%s' found", name);
+    free(name);
     return false;
   }
+  free(name);
   size_t i = 0;
   while(arg && i < f->f_info->n_params) {
     TYPE type = expr_type(analyzer, arg);
     if (!matchType(type, f->f_info->params[i].type)) {
-      semantic_error(analyzer, &arg->tok->loc, "wrong argument type: expected %s, found %s",
+      semantic_error(analyzer, &arg->token.loc, "wrong argument type: expected %s, found %s",
                      typeToStr(f->f_info->params[i].type), typeToStr(type));
     }
     i++;
     arg = arg->next;
   }
   if (arg != NULL) {
-    semantic_error(analyzer, &arg->tok->loc, "too many arguments for function '%s'", f->name);
+    semantic_error(analyzer, &arg->token.loc, "too many arguments for function '%s'", f->name);
   }
   else if (i < f->f_info->n_params) {
-    semantic_error(analyzer, &fcall->l->tok->loc, "too few arguments for function '%s'", f->name);
+    semantic_error(analyzer, &fcall->l->token.loc, "too few arguments for function '%s'", f->name);
   }
 
   return true;
@@ -328,19 +349,21 @@ bool typecheck_fcall(SemanticAnalyzer *analyzer, AST* fcall) {
 bool typecheck_assignment(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs) {
   symtabStack *sts = analyzer->symbols;
   int lhs_type, rhs_type;
-  char* id = lhs->tok->value;
+  char* id = token_cstr(&lhs->token);
   stEntry* var = lookup_all(sts, id);
   if (!var) {
-    semantic_error(analyzer, &lhs->tok->loc, "assignment to undeclared variable '%s'", id);
+    semantic_error(analyzer, &lhs->token.loc, "assignment to undeclared variable '%s'", id);
+    free(id);
     expr_type(analyzer, rhs);
     return false;
   }
+  free(id);
   lhs_type = var->type;
   rhs_type = expr_type(analyzer, rhs);
 
   if (rhs_type == TYPE_ERROR) return false;
   if (!matchType(lhs_type, rhs_type)) {
-    semantic_error(analyzer, &lhs->tok->loc, "incompatible assignment: expected %s, found %s",
+    semantic_error(analyzer, &lhs->token.loc, "incompatible assignment: expected %s, found %s",
                    typeToStr(lhs_type), typeToStr(rhs_type));
   }
   var->is_initialized = true;
@@ -351,9 +374,9 @@ int typecheck_operator(SemanticAnalyzer *analyzer, AST *op) {
   AST *lhs = op->l;
   AST *rhs = op->r;
   int lt = expr_type(analyzer, lhs);
-  if (op->tok->type == T_BANG) {
+  if (op->token.type == T_BANG) {
     if (lt != TYPE_ERROR && lt != BOOL) {
-      semantic_error(analyzer, &op->tok->loc, "'!' requires a bool operand");
+      semantic_error(analyzer, &op->token.loc, "'!' requires a bool operand");
       return TYPE_ERROR;
     }
     return BOOL;
@@ -363,17 +386,17 @@ int typecheck_operator(SemanticAnalyzer *analyzer, AST *op) {
   if (lt == TYPE_ERROR || rt == TYPE_ERROR) return TYPE_ERROR;
 
   if (!matchType(lt, rt)) {
-    semantic_error(analyzer, &lhs->tok->loc, "operator operands must have the same type: %s and %s",
+    semantic_error(analyzer, &lhs->token.loc, "operator operands must have the same type: %s and %s",
                    typeToStr(lt), typeToStr(rt));
     return TYPE_ERROR;
   }
 
   TYPE type = convertType(lt);
-  switch (op->tok->type) {
+  switch (op->token.type) {
     case T_EQ:
     case T_NEQ:
       if (type == STR || type == VOID || type == F) {
-        semantic_error(analyzer, &op->tok->loc, "equality does not support %s operands", typeToStr(type));
+        semantic_error(analyzer, &op->token.loc, "equality does not support %s operands", typeToStr(type));
         return TYPE_ERROR;
       }
       return BOOL;
@@ -382,20 +405,20 @@ int typecheck_operator(SemanticAnalyzer *analyzer, AST *op) {
     case T_GT:
     case T_GE:
       if (type != INT && type != FLOAT && type != CHAR) {
-        semantic_error(analyzer, &op->tok->loc, "relational operators require int, float, or char operands");
+        semantic_error(analyzer, &op->token.loc, "relational operators require int, float, or char operands");
         return TYPE_ERROR;
       }
       return BOOL;
     case T_AND:
     case T_OR:
       if (type != BOOL) {
-        semantic_error(analyzer, &op->tok->loc, "logical operators require bool operands");
+        semantic_error(analyzer, &op->token.loc, "logical operators require bool operands");
         return TYPE_ERROR;
       }
       return BOOL;
     default:
       if (type == INT || type == FLOAT) return type;
-      semantic_error(analyzer, &op->tok->loc, "arithmetic operators require int or float operands");
+      semantic_error(analyzer, &op->token.loc, "arithmetic operators require int or float operands");
       return TYPE_ERROR;
   }
 }

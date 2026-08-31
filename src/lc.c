@@ -8,25 +8,21 @@
 lc* initLC() {
   lc* lepC = malloc(sizeof(lc));
   init_diagnostics(&lepC->diagnostics);
-  lepC->lexer = initLexer(&lepC->diagnostics);
-  lepC->parser = initParser(lepC->lexer);
+  lepC->lexer = init_lexer(&lepC->diagnostics);
+  lepC->parser = init_parser(lepC->lexer);
   lepC->root = NULL;
   return lepC;
 }
 
 void freeLC(lc *lc) {
-  freeAST(lc->root);
-  freeParser(lc->parser);
-  freeLexer(lc->lexer);
+  free_ast(lc->root);
+  free_parser(lc->parser);
+  free_lexer(lc->lexer);
   free_diagnostics(&lc->diagnostics);
   free(lc);
 }
 
 bool lccompile(lc *lc) {
-  lex(lc->lexer);
-  if (lc->diagnostics.error_count) {
-    return false;
-  }
   lc->root = parse(lc->parser);
   if (lc->diagnostics.error_count) return false;
 

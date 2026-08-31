@@ -8,24 +8,22 @@
 typedef struct {
   Lexer *lexer;
 
-  node *node;
-  token *token;
+  token token;
+  token lookahead;
   DiagnosticList *diagnostics;
 } parser;
 
-parser *initParser(Lexer* lexer);
-void freeParser(parser *p);
+parser *init_parser(Lexer* lexer);
+void free_parser(parser *p);
 AST *parse(parser *p);
-// void match(tokenType type);
-int isType(parser* p);
-int isLiteral(parser* p);
-int acceptOp(parser* p);
-int acceptLiteral(parser* p);
-int acceptType(parser* p);
+int is_type(parser* p);
+int is_literal(parser* p);
+int accept_operator(parser* p);
+int accept_literal(parser* p);
+int accept_type(parser* p);
 int accept(parser *p, tokenType type);
 int expect(parser *p, tokenType type);
-token *nextToken(parser *p);
-token* peekToken(parser* p);
+token *get_next(parser *p);
 int digits(int n);
 
 AST* parse_program(parser* p);

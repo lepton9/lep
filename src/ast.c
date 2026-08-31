@@ -2,22 +2,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-AST *initAST(int type, token *t) {
+AST *init_ast(int type, const token *t) {
   AST *ast = malloc(sizeof(AST));
   ast->type = type;
-  // ast->tok = malloc(sizeof(token));
-  ast->tok = t;
+  ast->has_token = t != NULL;
+  if (t) ast->token = *t;
   ast->l = NULL;
   ast->r = NULL;
   ast->next = NULL;
   return ast;
 }
 
-void freeAST(AST *ast) {
+void free_ast(AST *ast) {
   if (ast) {
-    freeAST(ast->l);
-    freeAST(ast->r);
-    freeAST(ast->next);
+    free_ast(ast->l);
+    free_ast(ast->r);
+    free_ast(ast->next);
     free(ast);
   }
 }
@@ -70,19 +70,19 @@ void printAST(AST *node, int indent) {
       printf("Expression\n");
       break;
     case AST_TYPE:
-      printf("Type: %s\n", (char*)node->tok->value);
+      printf("Type: %.*s\n", node->token.length, node->token.start);
       break;
     case AST_ID:
-      printf("Identifier: %s\n", node->tok->value);
+      printf("Identifier: %.*s\n", node->token.length, node->token.start);
       break;
     case AST_MAIN:
-      printf("MAIN: %s\n", node->tok->value);
+      printf("MAIN: %.*s\n", node->token.length, node->token.start);
       break;
     case AST_OPERATOR:
-      printf("Operator: %s\n", node->tok->value);
+      printf("Operator: %.*s\n", node->token.length, node->token.start);
       break;
     case AST_VALUE:
-      printf("Value: %s\n", node->tok->value);
+      printf("Value: %.*s\n", node->token.length, node->token.start);
       break;
     default:
       printf("Undefined\n");
@@ -101,8 +101,8 @@ void print_ast(AST* node, int indent) {
   for (int i = 0; i < indent; i++)
     printf("  ");
 
-  if (node->tok) {
-    printf("%s\n", node->tok->value);
+  if (node->has_token) {
+    printf("%.*s\n", node->token.length, node->token.start);
   } else {
     printf("U\n");
   }

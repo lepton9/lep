@@ -70,19 +70,11 @@ typedef struct {
 
 typedef struct {
   tokenType type;
-  char *value;
   cLoc loc;
+  const char *start;
+  int length;
 } token;
 
-// Maybe better
-// typedef struct {
-//   tokenType type;
-//   int lenght;
-//   CLoc loc; // start of the token
-// } Token;
-
-token *makeToken(const tokenType type, const char *value, const cLoc codeLoc);
-void freeToken(token *tok);
 const char* tokenTypeToStr(tokenType type);
 void printToken(token* token);
 

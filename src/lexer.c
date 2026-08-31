@@ -2,7 +2,6 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
 #include <string.h>
 
 struct Keyword {
@@ -32,12 +31,11 @@ static const struct Keyword keywords[] = {
 static unsigned char keyword_slots[KEYWORD_TABLE_SIZE];
 static bool keyword_table_initialized = false;
 
-static size_t keyword_hash(const char *value) {
+static size_t keyword_hash(const char *value, size_t length) {
   size_t hash = 5381;
-  unsigned char c;
 
-  while ((c = (unsigned char)*value++) != '\0') {
-    hash = ((hash << 5) + hash) + c;
+  for (size_t i = 0; i < length; i++) {
+    hash = ((hash << 5) + hash) + (unsigned char)value[i];
   }
 
   return hash;
@@ -47,7 +45,7 @@ static void keyword_table_init(void) {
   if (keyword_table_initialized) return;
 
   for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
-    size_t slot = keyword_hash(keywords[i].name) % KEYWORD_TABLE_SIZE;
+    size_t slot = keyword_hash(keywords[i].name, strlen(keywords[i].name)) % KEYWORD_TABLE_SIZE;
 
     while (keyword_slots[slot] != 0) {
       slot = (slot + 1) % KEYWORD_TABLE_SIZE;
@@ -59,15 +57,17 @@ static void keyword_table_init(void) {
   keyword_table_initialized = true;
 }
 
-static tokenType lookup_keyword(const char *value) {
-  size_t slot = keyword_hash(value) % KEYWORD_TABLE_SIZE;
+static tokenType lookup_keyword(const char *value, size_t length) {
+  size_t slot = keyword_hash(value, length) % KEYWORD_TABLE_SIZE;
 
   while (1) {
     unsigned char entry = keyword_slots[slot];
     if (entry == 0) return T_IDENTIFIER;
 
     const struct Keyword *keyword = &keywords[entry - 1];
-    if (strcmp(value, keyword->name) == 0) return keyword->type;
+    if (strlen(keyword->name) == length && memcmp(value, keyword->name, length) == 0) {
+      return keyword->type;
+    }
 
     slot = (slot + 1) % KEYWORD_TABLE_SIZE;
   }
@@ -75,11 +75,10 @@ static tokenType lookup_keyword(const char *value) {
   return T_IDENTIFIER;
 }
 
-Lexer *initLexer(DiagnosticList *diagnostics) {
+Lexer *init_lexer(DiagnosticList *diagnostics) {
   keyword_table_init();
 
   Lexer *lexer = malloc(sizeof(Lexer));
-  lexer->tokens = create_list();
   lexer->src = NULL;
   lexer->srcLen = 0;
   lexer->srcPos = 0;
@@ -89,134 +88,116 @@ Lexer *initLexer(DiagnosticList *diagnostics) {
   return lexer;
 }
 
-void freeLexer(Lexer *lexer) {
-  while (!is_empty(lexer->tokens)) freeToken(pop_front(lexer->tokens));
-  free(lexer->tokens);
+void free_lexer(Lexer *lexer) {
   free(lexer->src);
   free(lexer);
 }
 
-LList* lex(Lexer *lexer) {
-  token *tok;
-  // TODO: tokenize while parsing. No need to tokenize the whole file
-  while (!atEnd(lexer)) {
-    tok = getNextToken(lexer);
-    if (tok) {
-      addToken(lexer, tok);
-    }
-  }
-
-  token *t_eof = makeToken(T_EOF, NULL, lexer->codeLoc);
-  addToken(lexer, t_eof);
-  return lexer->tokens;
-}
-
 void comment(Lexer* lexer) {
-  while (!atEnd(lexer) && peek(lexer) != '\n') advance(lexer);
+  while (!at_end(lexer) && peek(lexer) != '\n') advance(lexer);
 }
 
 static void lexer_error(Lexer *lexer, cLoc location, const char *message) {
   add_diagnostic(lexer->diagnostics, DIAGNOSTIC_ERROR, "lex", &location, "%s", message);
 }
 
-token *getNextToken(Lexer *lexer) {
-  int begI = lexer->srcPos;
-  cLoc cLocB = lexer->codeLoc;
-  char c = advance(lexer);
-  char* tv;
-  switch (c) {
+static token make_token(const Lexer *lexer, tokenType type, int beg, cLoc location) {
+  return (token){.type = type, .loc = location, .start = lexer->src + beg,
+                 .length = lexer->srcPos - beg};
+}
+
+token next_token(Lexer *lexer) {
+  while (!at_end(lexer)) {
+    int begI = lexer->srcPos;
+    cLoc cLocB = lexer->codeLoc;
+    char c = advance(lexer);
+    switch (c) {
     case ' ':
     case 9: // Tab
-      // token = makeToken(T_SPACE, c, cLocB);
-      return NULL;
+      continue;
     case '\n':
-      // token = makeToken(T_NEWLINE, c, cLocB);
-      nextLine(lexer);
-      return NULL;
+      next_line(lexer);
+      continue;
     case '#':
       comment(lexer);
-      return NULL;
-    case ':': return makeTokenN(lexer, T_COLON, begI, cLocB);
-    case ';': return makeTokenN(lexer, T_SEMICOLON, begI, cLocB);
-    case '(': return makeTokenN(lexer, T_PAREN_L, begI, cLocB);
-    case ')': return makeTokenN(lexer, T_PAREN_R, begI, cLocB);
-    case '{': return makeTokenN(lexer, T_BRACE_L, begI, cLocB);
-    case '}': return makeTokenN(lexer, T_BRACE_R, begI, cLocB);
-    case '.': return makeTokenN(lexer, T_DOT, begI, cLocB);
-    case ',': return makeTokenN(lexer, T_COMMA, begI, cLocB);
+      continue;
+    case ':': return make_token(lexer, T_COLON, begI, cLocB);
+    case ';': return make_token(lexer, T_SEMICOLON, begI, cLocB);
+    case '(': return make_token(lexer, T_PAREN_L, begI, cLocB);
+    case ')': return make_token(lexer, T_PAREN_R, begI, cLocB);
+    case '{': return make_token(lexer, T_BRACE_L, begI, cLocB);
+    case '}': return make_token(lexer, T_BRACE_R, begI, cLocB);
+    case '.': return make_token(lexer, T_DOT, begI, cLocB);
+    case ',': return make_token(lexer, T_COMMA, begI, cLocB);
     case '=':
       if (peek(lexer) == '=') {
         advance(lexer);
-        return makeTokenN(lexer, T_EQ, begI, cLocB);
+        return make_token(lexer, T_EQ, begI, cLocB);
       }
-      return makeTokenN(lexer, T_EQUALS, begI, cLocB);
+      return make_token(lexer, T_EQUALS, begI, cLocB);
     case '!':
       if (peek(lexer) == '=') {
         advance(lexer);
-        return makeTokenN(lexer, T_NEQ, begI, cLocB);
+        return make_token(lexer, T_NEQ, begI, cLocB);
       }
-      return makeTokenN(lexer, T_BANG, begI, cLocB);
+      return make_token(lexer, T_BANG, begI, cLocB);
     case '<':
       if (peek(lexer) == '=') {
         advance(lexer);
-        return makeTokenN(lexer, T_LE, begI, cLocB);
+        return make_token(lexer, T_LE, begI, cLocB);
       }
-      return makeTokenN(lexer, T_LT, begI, cLocB);
+      return make_token(lexer, T_LT, begI, cLocB);
     case '>':
       if (peek(lexer) == '=') {
         advance(lexer);
-        return makeTokenN(lexer, T_GE, begI, cLocB);
+        return make_token(lexer, T_GE, begI, cLocB);
       }
-      return makeTokenN(lexer, T_GT, begI, cLocB);
+      return make_token(lexer, T_GT, begI, cLocB);
     case '&':
       if (peek(lexer) == '&') {
         advance(lexer);
-        return makeTokenN(lexer, T_AND, begI, cLocB);
+        return make_token(lexer, T_AND, begI, cLocB);
       }
       lexer_error(lexer, cLocB, "expected '&' after '&'");
-      return NULL;
+      continue;
     case '|':
       if (peek(lexer) == '|') {
         advance(lexer);
-        return makeTokenN(lexer, T_OR, begI, cLocB);
+        return make_token(lexer, T_OR, begI, cLocB);
       }
       lexer_error(lexer, cLocB, "expected '|' after '|'");
-      return NULL;
-    case '+': return makeTokenN(lexer, T_PLUS, begI, cLocB);
-    case '*': return makeTokenN(lexer, T_ASTERISK, begI, cLocB);
-    case '/': return makeTokenN(lexer, T_SLASH, begI, cLocB);
+      continue;
+    case '+': return make_token(lexer, T_PLUS, begI, cLocB);
+    case '*': return make_token(lexer, T_ASTERISK, begI, cLocB);
+    case '/': return make_token(lexer, T_SLASH, begI, cLocB);
     case '-':
       if (peek(lexer) == '>') {
         advance(lexer);
-        return makeTokenN(lexer, T_ARROW, begI, cLocB);
+        return make_token(lexer, T_ARROW, begI, cLocB);
       }
-      return makeTokenN(lexer, T_MINUS, begI, cLocB);
+      return make_token(lexer, T_MINUS, begI, cLocB);
     case '\"':
-      while (!atEnd(lexer) && peek(lexer) != '\"') advance(lexer);
-      if (atEnd(lexer)) {
+      while (!at_end(lexer) && peek(lexer) != '\"') advance(lexer);
+      if (at_end(lexer)) {
         lexer_error(lexer, cLocB, "unterminated string literal");
-        return NULL;
+        continue;
       }
       advance(lexer);
-      tv = malStrncpy(lexer->src + begI, lexer->srcPos - begI);
-      return makeToken(T_LIT_STR, tv, cLocB);
+      return make_token(lexer, T_LIT_STR, begI, cLocB);
     case '\'':
-      if (atEnd(lexer) || advance(lexer) == '\'' || atEnd(lexer) || advance(lexer) != '\'') {
+      if (at_end(lexer) || advance(lexer) == '\'' || at_end(lexer) || advance(lexer) != '\'') {
         lexer_error(lexer, cLocB, "invalid character literal");
-        return NULL;
+        continue;
       }
-      tv = malStrncpy(lexer->src + begI, lexer->srcPos - begI);
-      return makeToken(T_LIT_CHAR, tv, cLocB);
+      return make_token(lexer, T_LIT_CHAR, begI, cLocB);
     default: {
       if (isalpha((unsigned char)c)) {
         while (isalpha(peek(lexer))) {
           advance(lexer);
         }
-        tv = malStrncpy(lexer->src + begI, lexer->srcPos - begI);
-        tokenType tt = lookup_keyword(tv);
+        tokenType tt = lookup_keyword(lexer->src + begI, (size_t)(lexer->srcPos - begI));
         if (tt == T_KW_TRUE || tt == T_KW_FALSE) tt = T_LIT_BOOL;
-        // tt = (tt >= 0) ? tt : T_IDENTIFIER;
-        return makeToken(tt, tv, cLocB);
+        return make_token(lexer, tt, begI, cLocB);
       }
       else if (isdigit((unsigned char)c)) {
         tokenType tt = T_LIT_INT;
@@ -228,57 +209,23 @@ token *getNextToken(Lexer *lexer) {
             while (isdigit((unsigned char)peek(lexer))) advance(lexer);
           } else {
             lexer_error(lexer, cLocB, "invalid float literal");
-            return NULL;
+            continue;
           }
         }
-        return makeTokenN(lexer, tt, begI, cLocB);
+        return make_token(lexer, tt, begI, cLocB);
       }
       break;
     }
   }
 
-  lexer_error(lexer, cLocB, "unrecognized token");
-  return NULL;
-}
-
-char* malStrncpy(const char *s, const size_t n) {
-  char *d = malloc(n + 1);
-  assert(d != NULL);
-  strncpy(d, s, n);
-  d[n] = '\0';
-  return d;
-}
-
-token* makeTokenN(Lexer* lexer, const tokenType type, const int beg, const cLoc cl) {
-  char* tval = malStrncpy(lexer->src + beg, lexer->srcPos - beg);
-  return makeToken(type, tval, cl);
-}
-
-void printTokens(Lexer *lexer) {
-  for (node *head=lexer->tokens->head; head != NULL; head = head->next) {
-    printToken(head->data);
+    lexer_error(lexer, cLocB, "unrecognized token");
   }
+
+  return (token){.type = T_EOF, .loc = lexer->codeLoc,
+                 .start = lexer->src + lexer->srcPos, .length = 0};
 }
 
-void addToken(Lexer *lexer, token *token) { add_to_end(lexer->tokens, token); }
-
-bool atEnd(Lexer *lexer) { return lexer->srcPos >= lexer->srcLen; }
-
-char peek(Lexer *lexer) {
-  if (atEnd(lexer)) {
-    return '\0';
-  }
-  return lexer->src[lexer->srcPos];
-  // return lexer->src[lexer->srcPos + 1];
-}
-
-char advance(Lexer *lexer) {
-  if (atEnd(lexer)) return '\0';
-  lexer->codeLoc.column++;
-  return lexer->src[lexer->srcPos++];
-}
-
-void nextLine(Lexer *lexer) {
+void next_line(Lexer *lexer) {
   lexer->codeLoc.line++;
   lexer->codeLoc.column = 1;
 }

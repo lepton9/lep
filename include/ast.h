@@ -29,15 +29,16 @@ typedef struct AST_NODE {
     AST_WHILE,
   } type;
 
-  token* tok;
+  token token;
+  bool has_token;
 
   struct AST_NODE* l;
   struct AST_NODE* r;
   struct AST_NODE* next;
 } AST;
 
-AST *initAST(int type, token* t);
-void freeAST(AST *ast);
+AST *init_ast(int type, const token *t);
+void free_ast(AST *ast);
 void printAST(AST* ast, int indent);
 void print_ast(AST* ast, int indent);
 
