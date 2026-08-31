@@ -63,8 +63,6 @@ typedef enum {
 
 } tokenType;
 
-// char keywords[20] = {"int", "float", "char", "bool", "str", "void", "f", "while", "return", "main", "if", "else"};
-
 typedef struct {
   int line;
   int column;

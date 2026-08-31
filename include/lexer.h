@@ -29,8 +29,6 @@ bool atEnd(Lexer *lexer);
 char peek(Lexer *lexer);
 char advance(Lexer *lexer);
 void nextLine(Lexer *lexer);
-tokenType isKeyword(const char *value);
-
 token* makeTokenN(Lexer *lexer, const tokenType type, const int beg, const cLoc cl);
 
 void printTokens(Lexer *lexer);

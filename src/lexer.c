@@ -5,7 +5,79 @@
 #include <assert.h>
 #include <string.h>
 
+struct Keyword {
+  const char *name;
+  tokenType type;
+};
+
+static const struct Keyword keywords[] = {
+  {"int", T_KW_INT},
+  {"char", T_KW_CHAR},
+  {"bool", T_KW_BOOL},
+  {"str", T_KW_STR},
+  {"float", T_KW_FLOAT},
+  {"void", T_KW_VOID},
+  {"f", T_KW_F},
+  {"true", T_KW_TRUE},
+  {"false", T_KW_FALSE},
+  {"main", T_KW_MAIN},
+  {"return", T_KW_RET},
+  {"if", T_KW_IF},
+  {"else", T_KW_ELSE},
+  {"while", T_KW_WHILE},
+};
+
+#define KEYWORD_TABLE_SIZE 64
+
+static unsigned char keyword_slots[KEYWORD_TABLE_SIZE];
+static bool keyword_table_initialized = false;
+
+static size_t keyword_hash(const char *value) {
+  size_t hash = 5381;
+  unsigned char c;
+
+  while ((c = (unsigned char)*value++) != '\0') {
+    hash = ((hash << 5) + hash) + c;
+  }
+
+  return hash;
+}
+
+static void keyword_table_init(void) {
+  if (keyword_table_initialized) return;
+
+  for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+    size_t slot = keyword_hash(keywords[i].name) % KEYWORD_TABLE_SIZE;
+
+    while (keyword_slots[slot] != 0) {
+      slot = (slot + 1) % KEYWORD_TABLE_SIZE;
+    }
+
+    keyword_slots[slot] = (unsigned char)(i + 1);
+  }
+
+  keyword_table_initialized = true;
+}
+
+static tokenType lookup_keyword(const char *value) {
+  size_t slot = keyword_hash(value) % KEYWORD_TABLE_SIZE;
+
+  while (1) {
+    unsigned char entry = keyword_slots[slot];
+    if (entry == 0) return T_IDENTIFIER;
+
+    const struct Keyword *keyword = &keywords[entry - 1];
+    if (strcmp(value, keyword->name) == 0) return keyword->type;
+
+    slot = (slot + 1) % KEYWORD_TABLE_SIZE;
+  }
+
+  return T_IDENTIFIER;
+}
+
 Lexer *initLexer(DiagnosticList *diagnostics) {
+  keyword_table_init();
+
   Lexer *lexer = malloc(sizeof(Lexer));
   lexer->tokens = create_list();
   lexer->src = NULL;
@@ -141,7 +213,7 @@ token *getNextToken(Lexer *lexer) {
           advance(lexer);
         }
         tv = malStrncpy(lexer->src + begI, lexer->srcPos - begI);
-        tokenType tt = isKeyword(tv);
+        tokenType tt = lookup_keyword(tv);
         if (tt == T_KW_TRUE || tt == T_KW_FALSE) tt = T_LIT_BOOL;
         // tt = (tt >= 0) ? tt : T_IDENTIFIER;
         return makeToken(tt, tv, cLocB);
@@ -167,25 +239,6 @@ token *getNextToken(Lexer *lexer) {
 
   lexer_error(lexer, cLocB, "unrecognized token");
   return NULL;
-}
-
-tokenType isKeyword(const char* value) {
-  // TODO: optimize
-  if (strcmp(value, "int") == 0) return T_KW_INT;
-  if (strcmp(value, "char") == 0) return T_KW_CHAR;
-  if (strcmp(value, "bool") == 0) return T_KW_BOOL;
-  if (strcmp(value, "str") == 0) return T_KW_STR;
-  if (strcmp(value, "float") == 0) return T_KW_FLOAT;
-  if (strcmp(value, "void") == 0) return T_KW_VOID;
-  if (strcmp(value, "f") == 0) return T_KW_F;
-  if (strcmp(value, "true") == 0) return T_KW_TRUE;
-  if (strcmp(value, "false") == 0) return T_KW_FALSE;
-  if (strcmp(value, "main") == 0) return T_KW_MAIN;
-  if (strcmp(value, "return") == 0) return T_KW_RET;
-  if (strcmp(value, "if") == 0) return T_KW_IF;
-  if (strcmp(value, "else") == 0) return T_KW_ELSE;
-  if (strcmp(value, "while") == 0) return T_KW_WHILE;
-  return T_IDENTIFIER;
 }
 
 char* malStrncpy(const char *s, const size_t n) {
