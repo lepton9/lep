@@ -4,11 +4,17 @@
 #include <string.h>
 
 
+static ht_e* init_item_view(strview key, void* value) {
+  ht_e* item = malloc(sizeof(ht_e));
+  item->key = strview_strdup(key);
+  item->value = value;
+  return item;
+}
+
 ht_e* init_item(const char* key, void* value) {
   ht_e* item = malloc(sizeof(ht_e));
-  item->key = malloc(strlen(key) + 1);
+  item->key = strdup(key);
   item->value = value;
-  strcpy(item->key, key);
   return item;
 }
 
@@ -38,30 +44,29 @@ void free_hashtab(hashtab* ht) {
 }
 
 // djb2
-static uint64_t hash_key(const char* key) {
+static uint64_t hash_key(strview key) {
   uint64_t hash = 5381;
-  int c;
-  while ((c = *key++)) {
-    hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+  for (size_t i = 0; i < key.length; i++) {
+    hash = ((hash << 5) + hash) + (unsigned char)key.start[i];
   }
   return hash;
 }
 
-static size_t key_index(const char* key, const size_t size) {
+static size_t key_index(strview key, const size_t size) {
   return hash_key(key) % size;
 }
 
-static ht_e* ht_set(ht_e** items, const size_t size, size_t* n, const char* key, void* value) {
+static ht_e* ht_set(ht_e** items, const size_t size, size_t* n, strview key, void* value) {
   size_t ind = key_index(key, size);
   while(items[ind] != NULL) {
-    if (strcmp(key, items[ind]->key) == 0) {
+    if (strview_eq_cstr(key, items[ind]->key)) {
       items[ind]->value = value;
       return items[ind];
     }
     // Linear probing
     ind = (ind + 1) % size;
   }
-  items[ind] = init_item(key, value);
+  items[ind] = init_item_view(key, value);
   (*n)++;
   return items[ind];
 }
@@ -76,7 +81,7 @@ static bool ht_expand(hashtab* ht) {
   for (size_t i = 0; i < ht->size; i++) {
     ht_e* item = ht->items[i];
     if (item != NULL) {
-      ht_set(new_items, new_size, &ht->n, item->key, item->value);
+      ht_set(new_items, new_size, &ht->n, strview_from_cstr(item->key), item->value);
     }
   }
   free(ht->items);
@@ -86,6 +91,10 @@ static bool ht_expand(hashtab* ht) {
 }
 
 ht_e* ht_insert(hashtab* ht, const char* key, void* value) {
+  return ht_insert_view(ht, strview_from_cstr(key), value);
+}
+
+ht_e* ht_insert_view(hashtab* ht, strview key, void* value) {
   if (ht->n >= ht->size / 2) {
     if (!ht_expand(ht)) return NULL;
   }
@@ -93,9 +102,13 @@ ht_e* ht_insert(hashtab* ht, const char* key, void* value) {
 }
 
 ht_e* ht_lookup(hashtab* ht, const char* key) {
+  return ht_lookup_view(ht, strview_from_cstr(key));
+}
+
+ht_e* ht_lookup_view(hashtab* ht, strview key) {
   size_t ind = key_index(key, ht->size);
   while(ht->items[ind] != NULL) {
-    if (strcmp(key, ht->items[ind]->key) == 0) {
+    if (strview_eq_cstr(key, ht->items[ind]->key)) {
       return ht->items[ind];
     }
     ind++;
@@ -105,14 +118,19 @@ ht_e* ht_lookup(hashtab* ht, const char* key) {
 }
 
 void* ht_get(hashtab* ht, const char* key) {
-  ht_e* e = ht_lookup(ht, key);
+  return ht_get_view(ht, strview_from_cstr(key));
+}
+
+void* ht_get_view(hashtab* ht, strview key) {
+  ht_e* e = ht_lookup_view(ht, key);
   return (e) ? e->value : NULL;
 }
 
 bool ht_delete(hashtab* ht, const char* key) {
-  size_t ind = key_index(key, ht->size);
+  strview key_view = strview_from_cstr(key);
+  size_t ind = key_index(key_view, ht->size);
   while(ht->items[ind] != NULL) {
-    if (strcmp(key, ht->items[ind]->key) == 0) {
+    if (strview_eq_cstr(key_view, ht->items[ind]->key)) {
       free_item(ht->items[ind]);
       ht->items[ind] = NULL;
       ht->n--;

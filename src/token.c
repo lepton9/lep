@@ -93,6 +93,6 @@ const char* tokenTypeToStr(tokenType type) {
 
 
 void printToken(token *tok) {
-  printf("%-13s %.*s L%-2d C%d\n", tokenTypeToStr(tok->type), tok->length,
-         tok->start, tok->loc.line, tok->loc.column);
+  printf("%-13s %.*s L%-2d C%d\n", tokenTypeToStr(tok->type), (int)tok->value.length,
+         tok->value.start, tok->loc.line, tok->loc.column);
 }

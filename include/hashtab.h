@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "../include/strview.h"
 
 #define INIT_SIZE 1024
 
@@ -27,6 +28,9 @@ void free_hashtab(hashtab* ht);
 void* ht_get(hashtab* ht, const char* key);
 ht_e* ht_lookup(hashtab* ht, const char* key);
 ht_e* ht_insert(hashtab* ht, const char* key, void* value);
+void* ht_get_view(hashtab* ht, strview key);
+ht_e* ht_lookup_view(hashtab* ht, strview key);
+ht_e* ht_insert_view(hashtab* ht, strview key, void* value);
 bool ht_delete(hashtab* ht, const char* key);
 
 #endif

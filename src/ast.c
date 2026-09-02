@@ -70,19 +70,19 @@ void printAST(AST *node, int indent) {
       printf("Expression\n");
       break;
     case AST_TYPE:
-      printf("Type: %.*s\n", node->token.length, node->token.start);
+      printf("Type: %.*s\n", (int)node->token.value.length, node->token.value.start);
       break;
     case AST_ID:
-      printf("Identifier: %.*s\n", node->token.length, node->token.start);
+      printf("Identifier: %.*s\n", (int)node->token.value.length, node->token.value.start);
       break;
     case AST_MAIN:
-      printf("MAIN: %.*s\n", node->token.length, node->token.start);
+      printf("MAIN: %.*s\n", (int)node->token.value.length, node->token.value.start);
       break;
     case AST_OPERATOR:
-      printf("Operator: %.*s\n", node->token.length, node->token.start);
+      printf("Operator: %.*s\n", (int)node->token.value.length, node->token.value.start);
       break;
     case AST_VALUE:
-      printf("Value: %.*s\n", node->token.length, node->token.start);
+      printf("Value: %.*s\n", (int)node->token.value.length, node->token.value.start);
       break;
     default:
       printf("Undefined\n");
@@ -102,7 +102,7 @@ void print_ast(AST* node, int indent) {
     printf("  ");
 
   if (node->has_token) {
-    printf("%.*s\n", node->token.length, node->token.start);
+    printf("%.*s\n", (int)node->token.value.length, node->token.value.start);
   } else {
     printf("U\n");
   }

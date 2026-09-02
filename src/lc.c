@@ -26,16 +26,16 @@ bool lccompile(lc *lc) {
   lc->root = parse(lc->parser);
   if (lc->diagnostics.error_count) return false;
 
-  SemanticResult *semantic_result = analyzeAST(lc->root, &lc->diagnostics);
+  SemanticResult *semantic_result = analyze_ast(lc->root, &lc->diagnostics);
   if (lc->diagnostics.error_count) {
-    freeSemanticResult(semantic_result);
+    free_semantic_result(semantic_result);
     return false;
   }
 
   ssa *ir = generate_ssair(lc->root, semantic_result, &lc->diagnostics);
   if (ir->valid) print_ssair(stdout, ir);
   free_ssair(ir);
-  freeSemanticResult(semantic_result);
+  free_semantic_result(semantic_result);
   return lc->diagnostics.error_count == 0;
 }
 

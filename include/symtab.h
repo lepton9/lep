@@ -23,7 +23,7 @@ typedef struct {
 } parameter;
 
 typedef struct {
-  int ret_type;
+  TYPE ret_type;
   size_t n_params;
   parameter* params;
 } func_info;
@@ -52,6 +52,8 @@ void free_stEntry(stEntry* entry);
 
 stEntry* st_insert(symtab* st, const char* key);
 stEntry* st_lookup(symtab* st, const char* identifier);
+stEntry* st_insert_view(symtab* st, strview key);
+stEntry* st_lookup_view(symtab* st, strview identifier);
 
 void enter_scope(symtabStack *sts);
 void exit_scope(symtabStack *sts);

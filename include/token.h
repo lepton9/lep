@@ -1,6 +1,8 @@
 #ifndef TOKEN_H
 #define TOKEN_H
 
+#include "../include/strview.h"
+
 #define COMMENT_CHAR '#'
 
 typedef enum {
@@ -71,9 +73,16 @@ typedef struct {
 typedef struct {
   tokenType type;
   cLoc loc;
-  const char *start;
-  int length;
+  strview value;
 } token;
+
+static inline strview token_view(const token *tok) {
+  return tok->value;
+}
+
+static inline char *token_strdup(const token *tok) {
+  return strview_strdup(token_view(tok));
+}
 
 const char* tokenTypeToStr(tokenType type);
 void printToken(token* token);

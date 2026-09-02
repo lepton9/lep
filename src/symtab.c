@@ -30,15 +30,22 @@ void free_stEntry(stEntry* entry) {
 }
 
 stEntry* st_insert(symtab* st, const char* key) {
+  return st_insert_view(st, strview_from_cstr(key));
+}
+
+stEntry* st_insert_view(symtab* st, strview key) {
   stEntry* e = calloc(1, sizeof(stEntry));
-  e->name = malloc(strlen(key) + 1);
-  strcpy(e->name, key);
-  ht_e* hte = ht_insert(st, key, e);
+  e->name = strview_strdup(key);
+  ht_e* hte = ht_insert_view(st, key, e);
   return hte->value;
 }
 
 stEntry* st_lookup(symtab* st, const char* identifier) {
-  stEntry* e = (stEntry*)ht_get(st, identifier);
+  return st_lookup_view(st, strview_from_cstr(identifier));
+}
+
+stEntry* st_lookup_view(symtab* st, strview identifier) {
+  stEntry* e = (stEntry*)ht_get_view(st, identifier);
   return e;
 }
 

@@ -102,8 +102,8 @@ static void lexer_error(Lexer *lexer, cLoc location, const char *message) {
 }
 
 static token make_token(const Lexer *lexer, tokenType type, int beg, cLoc location) {
-  return (token){.type = type, .loc = location, .start = lexer->src + beg,
-                 .length = lexer->srcPos - beg};
+  return (token){.type = type, .loc = location,
+                 .value = {.start = lexer->src + beg, .length = (size_t)(lexer->srcPos - beg)}};
 }
 
 token next_token(Lexer *lexer) {
@@ -222,7 +222,7 @@ token next_token(Lexer *lexer) {
   }
 
   return (token){.type = T_EOF, .loc = lexer->codeLoc,
-                 .start = lexer->src + lexer->srcPos, .length = 0};
+                 .value = {.start = lexer->src + lexer->srcPos, .length = 0}};
 }
 
 void next_line(Lexer *lexer) {

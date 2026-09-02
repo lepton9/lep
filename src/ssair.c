@@ -50,10 +50,6 @@ static const token *source_token(const AST *node) {
   return left ? left : source_token(node->r);
 }
 
-static char *token_cstr(const token *tok) {
-  return strndup(tok->start, (size_t)tok->length);
-}
-
 static void set_error(ssa *ir, const AST *node, const char *format, ...) {
   va_list args;
 
@@ -96,7 +92,7 @@ static operand char_operand(unsigned char value) {
 
 static operand string_operand(const token *value) {
   return (operand){.kind = SSA_OPERAND_STRING, .type = STR,
-                   .data.string_value = strndup(value->start, (size_t)value->length)};
+                   .data.string_value = strview_strdup(value->value)};
 }
 
 static operand copy_operand(operand source) {
@@ -132,21 +128,21 @@ static instruction *append_instruction(builder *build, opcode op, operand dest,
 }
 
 // Builds a call instruction.
-static instruction *append_call(builder *build, const char *callee, operand dest,
-                                ArrayList *args) {
+static instruction *append_call(builder *build, strview callee, operand dest,
+                                 ArrayList *args) {
   instruction *instruction_value = append_instruction(build, OP_CALL, dest,
                                                         none_operand(), none_operand());
-  instruction_value->data.call.callee = strdup(callee);
+  instruction_value->data.call.callee = strview_strdup(callee);
   instruction_value->data.call.arg_count = args->count;
   instruction_value->data.call.args = args->data;
   *args = (ArrayList){0};
   return instruction_value;
 }
 
-static uint64_t hash_name(const char *name) {
+static uint64_t hash_name(strview name) {
   uint64_t hash = 5381;
-  for (unsigned char character; (character = (unsigned char)*name++);) {
-    hash = (hash << 5) + hash + character;
+  for (size_t i = 0; i < name.length; i++) {
+    hash = (hash << 5) + hash + (unsigned char)name.start[i];
   }
   return hash;
 }
@@ -174,7 +170,7 @@ static inline const value_info *values_data_const(const function *function_value
 static void rehash_names(builder *build, size_t capacity) {
   size_t *slots = calloc(capacity, sizeof(*slots));
   for (size_t index = 0; index < build->function->names.count; index++) {
-    size_t slot = hash_name(names_data_const(build->function)[index].name) % capacity;
+    size_t slot = hash_name(strview_from_cstr(names_data_const(build->function)[index].name)) % capacity;
     while (slots[slot]) slot = (slot + 1) % capacity;
     slots[slot] = index + 1;
   }
@@ -183,12 +179,12 @@ static void rehash_names(builder *build, size_t capacity) {
   build->names.capacity = capacity;
 }
 
-static bool lookup_name(const builder *build, const char *name, size_t *index) {
+static bool lookup_name_view(const builder *build, strview name, size_t *index) {
   if (!build->names.capacity) return false;
   size_t slot = hash_name(name) % build->names.capacity;
   while (build->names.slots[slot]) {
     size_t candidate = build->names.slots[slot] - 1;
-    if (strcmp(names_data_const(build->function)[candidate].name, name) == 0) {
+    if (strview_eq_cstr(name, names_data_const(build->function)[candidate].name)) {
       *index = candidate;
       return true;
     }
@@ -197,9 +193,9 @@ static bool lookup_name(const builder *build, const char *name, size_t *index) {
   return false;
 }
 
-static size_t intern_name(builder *build, const char *name) {
+static size_t intern_name_view(builder *build, strview name) {
   size_t index;
-  if (lookup_name(build, name, &index)) return index;
+  if (lookup_name_view(build, name, &index)) return index;
   if (!build->names.capacity || (build->names.count + 1) * 2 > build->names.capacity) {
     rehash_names(build, build->names.capacity ? build->names.capacity * 2 : 16);
   }
@@ -208,7 +204,7 @@ static size_t intern_name(builder *build, const char *name) {
   grow_array((void **)&build->next_versions, &build->next_version_capacity,
              build->function->names.count + 1, sizeof(*build->next_versions));
   index = build->function->names.count;
-  ssa_name entry = {.name = strdup(name)};
+  ssa_name entry = {.name = strview_strdup(name)};
   array_list_push(&build->function->names, &entry);
   build->bindings[index] = INVALID_VALUE;
   build->next_versions[index] = 0;
@@ -223,8 +219,8 @@ static inline operand value_from_id(const function *function_value, unsigned id)
   return value_operand(id, values_data_const(function_value)[id].type);
 }
 
-static operand new_value(builder *build, const char *name, TYPE type) {
-  size_t name_index = intern_name(build, name);
+static operand new_value_view(builder *build, strview name, TYPE type) {
+  size_t name_index = intern_name_view(build, name);
   unsigned id = (unsigned)build->function->values.count;
   value_info value = {
       .name_index = (unsigned)name_index,
@@ -235,9 +231,13 @@ static operand new_value(builder *build, const char *name, TYPE type) {
   return value_operand(id, type);
 }
 
-static bool lookup_binding(const builder *build, const char *name, operand *value) {
+static operand new_value(builder *build, const char *name, TYPE type) {
+  return new_value_view(build, strview_from_cstr(name), type);
+}
+
+static bool lookup_binding_view(const builder *build, strview name, operand *value) {
   size_t name_index;
-  if (!lookup_name(build, name, &name_index) || build->bindings[name_index] == INVALID_VALUE) return false;
+  if (!lookup_name_view(build, name, &name_index) || build->bindings[name_index] == INVALID_VALUE) return false;
   *value = value_from_id(build->function, build->bindings[name_index]);
   return true;
 }
@@ -249,9 +249,13 @@ static bool lookup_binding_at(const builder *build, const binding_snapshot *bind
   return true;
 }
 
-static void bind_value(builder *build, const char *name, operand value) {
-  size_t name_index = intern_name(build, name);
+static void bind_value_view(builder *build, strview name, operand value) {
+  size_t name_index = intern_name_view(build, name);
   build->bindings[name_index] = value.data.value.id;
+}
+
+static void bind_value(builder *build, const char *name, operand value) {
+  bind_value_view(build, strview_from_cstr(name), value);
 }
 
 static binding_snapshot copy_bindings(const builder *build) {
@@ -359,30 +363,30 @@ static bool same_operand(operand left, operand right) {
 }
 
 static TYPE ast_type(const AST *type_node) {
-  return type_node && type_node->has_token ? convertType(type_node->token.type) : VOID;
+  return type_node && type_node->has_token ? token_to_type(type_node->token.type) : VOID;
 }
 
 static bool is_value_type(TYPE type) {
   return type == INT || type == FLOAT || type == CHAR || type == BOOL || type == STR;
 }
 
-static stEntry *lookup_function(builder *build, const char *name) {
+static stEntry *lookup_function(builder *build, strview name) {
   if (!build->semantic || !build->semantic->symbols) return NULL;
-  stEntry *entry = lookup_scope(currentScope(build->semantic->symbols), name);
+  stEntry *entry = st_lookup_view(current_scope(build->semantic->symbols), name);
   return entry && entry->type == F ? entry : NULL;
 }
 
 static operand literal_operand(builder *build, AST *expression) {
   switch (expression->token.type) {
     case T_LIT_INT:
-      return int_operand(strtol(expression->token.start, NULL, 10));
+      return int_operand(strtol(expression->token.value.start, NULL, 10));
     case T_LIT_FLOAT:
-      return float_operand(strtod(expression->token.start, NULL));
+      return float_operand(strtod(expression->token.value.start, NULL));
     case T_LIT_BOOL:
-      return bool_operand(expression->token.length == 4 &&
-                          memcmp(expression->token.start, "true", 4) == 0);
+      return bool_operand(expression->token.value.length == 4 &&
+                          memcmp(expression->token.value.start, "true", 4) == 0);
     case T_LIT_CHAR:
-      return char_operand((unsigned char)expression->token.start[1]);
+      return char_operand((unsigned char)expression->token.value.start[1]);
     case T_LIT_STR:
       return string_operand(&expression->token);
     default:
@@ -395,17 +399,17 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 
 // Lowers a function call and returns its SSA result.
 static operand emit_call(builder *build, AST *call, const operand *target) {
-  char *callee = token_cstr(&call->l->token);
+  strview callee = token_view(&call->l->token);
   stEntry *function_value = lookup_function(build, callee);
   if (!function_value || !function_value->f_info) {
-    set_error(build->ir, call->l, "no SSA function signature is available for '%s'", callee);
-    free(callee);
+    set_error(build->ir, call->l, "no SSA function signature is available for '%.*s'",
+              (int)callee.length, callee.start);
     return none_operand();
   }
   func_info *signature = function_value->f_info;
   if (signature->ret_type == VOID && target) {
-    set_error(build->ir, call->l, "void function '%s' cannot be used as an expression", callee);
-    free(callee);
+    set_error(build->ir, call->l, "void function '%.*s' cannot be used as an expression",
+              (int)callee.length, callee.start);
     return none_operand();
   }
 
@@ -416,19 +420,20 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
     if (build->ir->valid &&
         (args.count >= signature->n_params ||
          argument_value.type != signature->params[args.count].type)) {
-      set_error(build->ir, argument, "call to '%s' has an incompatible argument", callee);
+      set_error(build->ir, argument, "call to '%.*s' has an incompatible argument",
+                (int)callee.length, callee.start);
     }
     array_list_push(&args, &argument_value);
   }
   if (build->ir->valid && args.count != signature->n_params) {
-    set_error(build->ir, call->l, "call to '%s' has the wrong number of arguments", callee);
+    set_error(build->ir, call->l, "call to '%.*s' has the wrong number of arguments",
+              (int)callee.length, callee.start);
   }
   if (!build->ir->valid) {
     for (size_t index = 0; index < args.count; index++) {
       free_operand(*(operand *)array_list_get(&args, index));
     }
     array_list_free(&args);
-    free(callee);
     return none_operand();
   }
 
@@ -437,7 +442,6 @@ static operand emit_call(builder *build, AST *call, const operand *target) {
     result = target ? copy_operand(*target) : new_value(build, "tmp", signature->ret_type);
   }
   append_call(build, callee, result, &args);
-  free(callee);
   return result;
 }
 
@@ -451,13 +455,12 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 
   if (expression->type == AST_ID) {
     operand value;
-    char *name = token_cstr(&expression->token);
-    if (!lookup_binding(build, name, &value)) {
-      set_error(build->ir, expression, "no SSA value is available for '%s'", name);
-      free(name);
+    strview name = token_view(&expression->token);
+    if (!lookup_binding_view(build, name, &value)) {
+      set_error(build->ir, expression, "no SSA value is available for '%.*s'",
+                (int)name.length, name.start);
       return none_operand();
     }
-    free(name);
     return value;
   }
 
@@ -559,38 +562,36 @@ static operand emit_expression(builder *build, AST *expression, const operand *t
 
 // Creates the next version of an assigned variable and updates its current binding.
 static void emit_assignment(builder *build, AST *assignment, TYPE declared_type) {
-  char *name = token_cstr(&assignment->l->token);
+  strview name = token_view(&assignment->l->token);
   operand previous;
   TYPE type = declared_type;
-  if (type == VOID && lookup_binding(build, name, &previous)) type = previous.type;
+  if (type == VOID && lookup_binding_view(build, name, &previous)) type = previous.type;
   if (!is_value_type(type)) {
-    set_error(build->ir, assignment->l, "SSA cannot assign values to '%s' of type %s", name, typeToStr(type));
-    free(name);
+    set_error(build->ir, assignment->l, "SSA cannot assign values to '%.*s' of type %s",
+              (int)name.length, name.start, typeToStr(type));
     return;
   }
 
-  operand destination = new_value(build, name, type);
+  operand destination = new_value_view(build, name, type);
   operand result = emit_expression(build, assignment->r, &destination);
   if (!build->ir->valid) {
     free_operand(destination);
     free_operand(result);
-    free(name);
     return;
   }
   if (result.type != type) {
-    set_error(build->ir, assignment->l, "assignment to '%s' has incompatible SSA types", name);
+    set_error(build->ir, assignment->l, "assignment to '%.*s' has incompatible SSA types",
+              (int)name.length, name.start);
     free_operand(destination);
     free_operand(result);
-    free(name);
     return;
   }
   if (result.kind != SSA_OPERAND_VALUE || result.data.value.id != destination.data.value.id) {
     append_instruction(build, OP_COPY, destination, result, none_operand());
   }
-  bind_value(build, name, destination);
+  bind_value_view(build, name, destination);
   free_operand(destination);
   free_operand(result);
-  free(name);
 }
 
 static void emit_statement_list(builder *build, AST *statement);
@@ -784,8 +785,8 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
   array_list_init(&function_value->values, sizeof(value_info));
   array_list_init(&function_value->names, sizeof(ssa_name));
 
-  function_value->name = token_cstr(&name_node->token);
-  stEntry *function_symbol = lookup_function(&build, function_value->name);
+  function_value->name = token_strdup(&name_node->token);
+  stEntry *function_symbol = lookup_function(&build, strview_from_cstr(function_value->name));
   if (!function_symbol || !function_symbol->f_info) {
     set_error(ir, name_node, "no semantic function signature is available for '%s'", function_value->name);
     return function_value;
@@ -806,11 +807,10 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
       set_error(ir, parameter, "SSA parameters must have a value type");
       break;
     }
-    char *parameter_name = token_cstr(&parameter->r->token);
-    operand parameter_value = new_value(&build, parameter_name, parameter_type);
+    strview parameter_name = token_view(&parameter->r->token);
+    operand parameter_value = new_value_view(&build, parameter_name, parameter_type);
     array_list_push(&function_value->params, &parameter_value);
-    bind_value(&build, parameter_name, parameter_value);
-    free(parameter_name);
+    bind_value_view(&build, parameter_name, parameter_value);
   }
   if (ir->valid && function_value->params.count != function_symbol->f_info->n_params) {
     set_error(ir, name_node, "semantic parameter count does not match function '%s'", function_value->name);
@@ -838,7 +838,7 @@ static global_var *emit_global(ssa *ir, AST *ast) {
     set_error(ir, identifier, "SSA globals must have a value type");
     return global;
   }
-  global->name = token_cstr(&identifier->token);
+  global->name = token_strdup(&identifier->token);
   global->type = type;
   if (ast->r->type != AST_ASSIGNMENT) return global;
 

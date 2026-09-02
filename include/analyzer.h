@@ -24,28 +24,21 @@ typedef struct {
   symtabStack* symbols;
 } SemanticResult;
 
-symtab* currentScope(symtabStack* sts);
+symtab* current_scope(symtabStack* sts);
 void enter_scope(symtabStack* sts);
 void exit_scope(symtabStack* sts);
 
-bool matchType(const int a, const int b);
-int funcRetType(AST* f); // To be deleted
-TYPE convertType(const int type);
+TYPE token_to_type(const tokenType type);
 
-stEntry* newVariable(symtabStack* sts, const char* id, const TYPE type);
-
-stEntry* lookup_all(symtabStack* sts, const char* key);
-stEntry* lookup_scope(symtab* st, const char* key);
-
-SemanticResult* analyzeAST(AST* root, DiagnosticList *diagnostics);
-void freeSemanticResult(SemanticResult* result);
-void semanticAnalysis(SemanticAnalyzer* analyzer, AST* ast);
+SemanticResult* analyze_ast(AST* root, DiagnosticList *diagnostics);
+void free_semantic_result(SemanticResult* result);
+void semantic_analysis(SemanticAnalyzer* analyzer, AST* ast);
 
 TYPE expr_type(SemanticAnalyzer *analyzer, AST* expr);
 
 bool typecheck_fcall(SemanticAnalyzer *analyzer, AST* fcall);
 bool typecheck_assignment(SemanticAnalyzer *analyzer, AST* lhs, AST* rhs);
-int typecheck_operator(SemanticAnalyzer *analyzer, AST* op);
+TYPE typecheck_operator(SemanticAnalyzer *analyzer, AST* op);
 
 
 #endif
