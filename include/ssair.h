@@ -70,7 +70,10 @@ typedef struct {
 } operand;
 
 typedef struct {
+  // Value carried into the phi's block along `block`.
   operand value;
+  // One predecessor of the phi's block. The phi receives `value` whenever
+  // control reaches the block through this edge.
   struct basic_block *block;
 } phi_entry;
 

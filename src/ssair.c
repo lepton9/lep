@@ -335,6 +335,7 @@ static void emit_conditional_branch(builder *build, operand condition, basic_blo
   build->terminated = true;
 }
 
+// Create a new phi instruction.
 static instruction *emit_phi(builder *build, operand destination, operand *values,
                              basic_block **blocks, size_t count) {
   instruction *phi = append_instruction(build, OP_PHI, destination, none_operand(), none_operand());
@@ -345,6 +346,16 @@ static instruction *emit_phi(builder *build, operand destination, operand *value
     phi->data.phi.entries[index].block = blocks[index];
   }
   return phi;
+}
+
+// Appends an incoming edge to an existing phi instruction.
+static void emit_phi_entry(instruction *phi, operand value, basic_block *block) {
+  size_t old_count = phi->data.phi.count;
+  phi->data.phi.count++;
+  phi->data.phi.entries =
+      realloc(phi->data.phi.entries, phi->data.phi.count * sizeof(*phi->data.phi.entries));
+  phi->data.phi.entries[old_count].value = copy_operand(value);
+  phi->data.phi.entries[old_count].block = block;
 }
 
 static bool same_operand(operand left, operand right) {
@@ -681,9 +692,9 @@ static void emit_while(builder *build, AST *statement) {
     if (!lookup_binding_at(build, &incoming, name_index, &original)) continue;
     const char *name = names_data_const(build->function)[name_index].name;
     operand destination = new_value(build, name, original.type);
-    operand values[2] = {original, none_operand()};
-    basic_block *blocks[2] = {predecessor_at(header, 0), NULL};
-    emit_phi(build, destination, values, blocks, 2);
+    operand values[1] = {original};
+    basic_block *blocks[1] = {predecessor_at(header, 0)};
+    emit_phi(build, destination, values, blocks, 1);
     bind_value(build, name, destination);
     free_operand(destination);
   }
@@ -698,18 +709,29 @@ static void emit_while(builder *build, AST *statement) {
   emit_statement(build, statement->r);
   binding_snapshot body_bindings = copy_bindings(build);
   basic_block *body_end = build->block;
-  // Infinite while loop
-  if (!body_end->terminated) emit_branch(build, header);
 
-  for (instruction *instruction_value = header->first; instruction_value &&
-       instruction_value->op == OP_PHI; instruction_value = instruction_value->next) {
-    size_t name_index = values_data_const(build->function)[instruction_value->dest.data.value.id].name_index;
-    operand body_value;
-    if (!lookup_binding_at(build, &body_bindings, name_index, &body_value) &&
-        !lookup_binding_at(build, &incoming, name_index, &body_value)) continue;
-    free_operand(instruction_value->data.phi.entries[1].value);
-    instruction_value->data.phi.entries[1].value = copy_operand(body_value);
-    instruction_value->data.phi.entries[1].block = body_end;
+  // Only loops whose bodies branch back to the header carry a second incoming
+  // value. A body ending in `ret` leaves the header phi with its single entry.
+  bool loops_back = !body_end->terminated;
+  if (loops_back) {
+    emit_branch(build, header);
+
+    for (instruction *instruction_value = header->first; instruction_value &&
+         instruction_value->op == OP_PHI; instruction_value = instruction_value->next) {
+      const value_info *values = values_data_const(build->function);
+      const unsigned dest_value_id = instruction_value->dest.data.value.id;
+      size_t name_index = values[dest_value_id].name_index;
+      operand body_value;
+      if (!lookup_binding_at(build, &body_bindings, name_index, &body_value) &&
+          !lookup_binding_at(build, &incoming, name_index, &body_value)) continue;
+      // A body that never rebinds the variable carries its incoming value
+      // around the loop, so use that instead of a self-referential phi edge.
+      if (body_value.kind == SSA_OPERAND_VALUE &&
+          body_value.data.value.id == dest_value_id) {
+        if (!lookup_binding_at(build, &incoming, name_index, &body_value)) continue;
+      }
+      emit_phi_entry(instruction_value, body_value, body_end);
+    }
   }
   build->block = exit;
   build->terminated = false;
@@ -774,6 +796,118 @@ static void emit_statement_list(builder *build, AST *statement) {
   }
 }
 
+// Rewrites a single operand slot when it currently refers to `from_id`,
+// replacing it with `replacement`. Frees the old owned copy.
+static void rewrite_operand(operand *use, unsigned from_id, operand replacement) {
+  if (use->kind != SSA_OPERAND_VALUE || use->data.value.id != from_id) return;
+  free_operand(*use);
+  *use = copy_operand(replacement);
+}
+
+// Rewrites every use of SSA value `from_id` to `replacement` across the
+// function.
+static void rewrite_value_uses(function *function_value, unsigned from_id,
+                               operand replacement) {
+  for (basic_block *block = function_value->blocks; block; block = block->next) {
+    for (instruction *instruction_value = block->first; instruction_value;
+         instruction_value = instruction_value->next) {
+      switch (instruction_value->op) {
+        case OP_CALL:
+          for (size_t index = 0; index < instruction_value->data.call.arg_count; index++) {
+            operand *args = instruction_value->data.call.args;
+            rewrite_operand(&args[index], from_id, replacement);
+          }
+          break;
+        case OP_PHI:
+          for (size_t index = 0; index < instruction_value->data.phi.count; index++) {
+            phi_entry *entries = instruction_value->data.phi.entries;
+            rewrite_operand(&entries[index].value, from_id, replacement);
+          }
+          break;
+        case OP_CBR:
+          rewrite_operand(&instruction_value->data.conditional_branch.condition, from_id, replacement);
+          break;
+        case OP_BR:
+          // No value operands.
+          break;
+        default:
+          // copy, arithmetic, comparisons, not, ret.
+          rewrite_operand(&instruction_value->data.operands.src1, from_id, replacement);
+          rewrite_operand(&instruction_value->data.operands.src2, from_id, replacement);
+          break;
+      }
+    }
+  }
+}
+
+// A phi is degenerate when every non-self incoming value is the same operand,
+// so the phi can be replaced by that operand everywhere.
+//
+// For example:
+//
+// %y.0 = phi [%x.0, block.1], [%x.0, block.2] -> %y.0 == %x.0
+static bool phi_collapses(const instruction *phi, operand *replacement) {
+  operand chosen = none_operand();
+  bool have_chosen = false;
+  for (size_t index = 0; index < phi->data.phi.count; index++) {
+    const operand *entry_value = &phi->data.phi.entries[index].value;
+    if (entry_value->kind == SSA_OPERAND_VALUE &&
+        entry_value->data.value.id == phi->dest.data.value.id) {
+      continue;
+    }
+    if (!have_chosen) {
+      chosen = *entry_value;
+      have_chosen = true;
+    } else if (!same_operand(chosen, *entry_value)) {
+      return false;
+    }
+  }
+  if (!have_chosen) return false;
+  *replacement = chosen;
+  return true;
+}
+
+static void free_phi(instruction *phi) {
+  free_operand(phi->dest);
+  for (size_t index = 0; index < phi->data.phi.count; index++) {
+    free_operand(phi->data.phi.entries[index].value);
+  }
+  free(phi->data.phi.entries);
+  free(phi);
+}
+
+// Removes phis whose incoming values are all identical, rewriting their uses.
+static void collapse_degenerate_phis(function *function_value) {
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (basic_block *block = function_value->blocks; block; block = block->next) {
+      instruction *previous = NULL;
+      instruction *instruction_value = block->first;
+      while (instruction_value) {
+        if (instruction_value->op != OP_PHI) break;
+        instruction *next = instruction_value->next;
+        operand replacement;
+
+        if (phi_collapses(instruction_value, &replacement)) {
+          unsigned from_id = instruction_value->dest.data.value.id;
+          rewrite_value_uses(function_value, from_id, replacement);
+          // Remove the phi instruction and connect the surrounding blocks.
+          if (previous) previous->next = next;
+          else block->first = next;
+          if (block->last == instruction_value) block->last = previous;
+          free_phi(instruction_value);
+          changed = true;
+        } else {
+          previous = instruction_value;
+        }
+
+        instruction_value = next;
+      }
+    }
+  }
+}
+
 // Lowers one function body using its semantic function contract.
 static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic) {
   AST *header = ast->l;
@@ -823,6 +957,7 @@ static function *emit_function(ssa *ir, AST *ast, const SemanticResult *semantic
       set_error(ir, name_node, "function '%s' has no return instruction", function_value->name);
     }
   }
+  if (ir->valid) collapse_degenerate_phis(function_value);
 
   free_builder_storage(&build);
   return function_value;
