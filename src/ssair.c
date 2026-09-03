@@ -134,7 +134,7 @@ static instruction *append_call(builder *build, strview callee, operand dest,
                                                         none_operand(), none_operand());
   instruction_value->data.call.callee = strview_strdup(callee);
   instruction_value->data.call.arg_count = args->count;
-  instruction_value->data.call.args = args->data;
+  instruction_value->data.call.args = args->items;
   *args = (ArrayList){0};
   return instruction_value;
 }
@@ -155,22 +155,22 @@ static void grow_array(void **items, size_t *capacity, size_t required, size_t i
   *capacity = new_capacity;
 }
 
-static inline ssa_name *names_data(function *function_value) {
-  return function_value->names.data;
+static inline ssa_name *names_items(function *function_value) {
+  return function_value->names.items;
 }
 
-static inline const ssa_name *names_data_const(const function *function_value) {
-  return function_value->names.data;
+static inline const ssa_name *names_items_const(const function *function_value) {
+  return function_value->names.items;
 }
 
-static inline const value_info *values_data_const(const function *function_value) {
-  return function_value->values.data;
+static inline const value_info *values_items_const(const function *function_value) {
+  return function_value->values.items;
 }
 
 static void rehash_names(builder *build, size_t capacity) {
   size_t *slots = calloc(capacity, sizeof(*slots));
   for (size_t index = 0; index < build->function->names.count; index++) {
-    size_t slot = hash_name(strview_from_cstr(names_data_const(build->function)[index].name)) % capacity;
+    size_t slot = hash_name(strview_from_cstr(names_items_const(build->function)[index].name)) % capacity;
     while (slots[slot]) slot = (slot + 1) % capacity;
     slots[slot] = index + 1;
   }
@@ -184,7 +184,7 @@ static bool lookup_name_view(const builder *build, strview name, size_t *index) 
   size_t slot = hash_name(name) % build->names.capacity;
   while (build->names.slots[slot]) {
     size_t candidate = build->names.slots[slot] - 1;
-    if (strview_eq_cstr(name, names_data_const(build->function)[candidate].name)) {
+    if (strview_eq_cstr(name, names_items_const(build->function)[candidate].name)) {
       *index = candidate;
       return true;
     }
@@ -216,7 +216,7 @@ static size_t intern_name_view(builder *build, strview name) {
 }
 
 static inline operand value_from_id(const function *function_value, unsigned id) {
-  return value_operand(id, values_data_const(function_value)[id].type);
+  return value_operand(id, values_items_const(function_value)[id].type);
 }
 
 static operand new_value_view(builder *build, strview name, TYPE type) {
@@ -659,7 +659,7 @@ static void emit_if(builder *build, AST *statement) {
     if (then_reaches_merge && else_reaches_merge &&
         !same_operand(then_value, else_value)) {
       // Both branches modify the variable
-      const char *name = names_data_const(build->function)[name_index].name;
+      const char *name = names_items_const(build->function)[name_index].name;
       operand destination = new_value(build, name, original.type);
       operand values[2] = {then_value, else_value};
       basic_block *blocks[2] = {then_end, else_end};
@@ -667,9 +667,9 @@ static void emit_if(builder *build, AST *statement) {
       bind_value(build, name, destination);
       free_operand(destination);
     } else if (then_reaches_merge && !else_reaches_merge) {
-      bind_value(build, names_data_const(build->function)[name_index].name, then_value);
+      bind_value(build, names_items_const(build->function)[name_index].name, then_value);
     } else if (!then_reaches_merge && else_reaches_merge) {
-      bind_value(build, names_data_const(build->function)[name_index].name, else_value);
+      bind_value(build, names_items_const(build->function)[name_index].name, else_value);
     }
   }
   free_bindings(&incoming);
@@ -690,7 +690,7 @@ static void emit_while(builder *build, AST *statement) {
   for (size_t name_index = 0; name_index < incoming.count; name_index++) {
     operand original;
     if (!lookup_binding_at(build, &incoming, name_index, &original)) continue;
-    const char *name = names_data_const(build->function)[name_index].name;
+    const char *name = names_items_const(build->function)[name_index].name;
     operand destination = new_value(build, name, original.type);
     operand values[1] = {original};
     basic_block *blocks[1] = {predecessor_at(header, 0)};
@@ -718,7 +718,7 @@ static void emit_while(builder *build, AST *statement) {
 
     for (instruction *instruction_value = header->first; instruction_value &&
          instruction_value->op == OP_PHI; instruction_value = instruction_value->next) {
-      const value_info *values = values_data_const(build->function);
+      const value_info *values = values_items_const(build->function);
       const unsigned dest_value_id = instruction_value->dest.data.value.id;
       size_t name_index = values[dest_value_id].name_index;
       operand body_value;
@@ -1053,8 +1053,8 @@ static void print_operand(FILE *out, const function *function_value, operand ope
   switch (operand_value.kind) {
     case SSA_OPERAND_NONE: fputs("void", out); break;
     case SSA_OPERAND_VALUE: {
-      const value_info *value = &values_data_const(function_value)[operand_value.data.value.id];
-      fprintf(out, "%%%s.%u", names_data_const(function_value)[value->name_index].name, value->version);
+      const value_info *value = &values_items_const(function_value)[operand_value.data.value.id];
+      fprintf(out, "%%%s.%u", names_items_const(function_value)[value->name_index].name, value->version);
       break;
     }
     case SSA_OPERAND_INT: fprintf(out, "%ld", operand_value.data.int_value); break;
@@ -1193,7 +1193,7 @@ void free_ssair(ssa *ir) {
         array_list_free(&function_value->params);
         array_list_free(&function_value->values);
         for (size_t index = 0; index < function_value->names.count; index++) {
-          free(names_data(function_value)[index].name);
+          free(names_items(function_value)[index].name);
         }
         array_list_free(&function_value->names);
         for (basic_block *block = function_value->blocks; block;) {

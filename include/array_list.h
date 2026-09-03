@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 typedef struct {
-  void *data;
+  void *items;
   size_t count;
   size_t capacity;
   size_t item_size;

@@ -16,7 +16,7 @@ bool array_list_init(ArrayList *list, size_t item_size) {
 
 void array_list_free(ArrayList *list) {
   if (!list) return;
-  free(list->data);
+  free(list->items);
   *list = (ArrayList){0};
 }
 
@@ -24,9 +24,9 @@ bool array_list_reserve(ArrayList *list, size_t capacity) {
   if (!list || list->item_size == 0) return false;
   if (capacity <= list->capacity) return true;
   if (!can_allocate(list, capacity)) return false;
-  void *data = realloc(list->data, capacity * list->item_size);
-  if (!data) return false;
-  list->data = data;
+  void *items = realloc(list->items, capacity * list->item_size);
+  if (!items) return false;
+  list->items = items;
   list->capacity = capacity;
   return true;
 }
@@ -37,19 +37,19 @@ bool array_list_push(ArrayList *list, const void *item) {
     size_t capacity = list->capacity ? list->capacity * 2 : 8;
     if (capacity < list->capacity || !array_list_reserve(list, capacity)) return false;
   }
-  memcpy((char *)list->data + list->count * list->item_size, item, list->item_size);
+  memcpy((char *)list->items + list->count * list->item_size, item, list->item_size);
   list->count++;
   return true;
 }
 
 void *array_list_get(ArrayList *list, size_t index) {
   if (!list || index >= list->count) return NULL;
-  return (char *)list->data + index * list->item_size;
+  return (char *)list->items + index * list->item_size;
 }
 
 const void *array_list_get_const(const ArrayList *list, size_t index) {
   if (!list || index >= list->count) return NULL;
-  return (const char *)list->data + index * list->item_size;
+  return (const char *)list->items + index * list->item_size;
 }
 
 bool array_list_remove(ArrayList *list, size_t index, void *out_item) {
@@ -87,14 +87,14 @@ bool array_list_shrink_to_fit(ArrayList *list) {
   if (!list) return false;
   if (list->count == list->capacity) return true;
   if (list->count == 0) {
-    free(list->data);
-    list->data = NULL;
+    free(list->items);
+    list->items = NULL;
     list->capacity = 0;
     return true;
   }
-  void *data = realloc(list->data, list->count * list->item_size);
-  if (!data) return false;
-  list->data = data;
+  void *items = realloc(list->items, list->count * list->item_size);
+  if (!items) return false;
+  list->items = items;
   list->capacity = list->count;
   return true;
 }
