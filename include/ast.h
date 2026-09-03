@@ -39,7 +39,7 @@ typedef struct AST_NODE {
 
 AST *init_ast(int type, const token *t);
 void free_ast(AST *ast);
-void printAST(AST* ast, int indent);
+void print_ast_typed(AST* ast, int indent);
 void print_ast(AST* ast, int indent);
 
 #endif

@@ -13,8 +13,7 @@ typedef struct {
   DiagnosticList *diagnostics;
 } parser;
 
-parser *init_parser(Lexer* lexer);
-void free_parser(parser *p);
+parser init_parser(Lexer *lexer);
 AST *parse(parser *p);
 int is_type(parser* p);
 int is_literal(parser* p);

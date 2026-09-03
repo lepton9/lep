@@ -9,15 +9,20 @@
 #define COMMENT_CHAR '#'
 
 typedef struct {
-  char *src;
-  int srcLen;
-  int srcPos;
+  // Borrowed source file content.
+  const char *src;
+  // Length of the source file.
+  size_t srcLen;
+  // Current index in the source file.
+  size_t srcPos;
+  // Current code location in the source file.
   cLoc codeLoc;
   DiagnosticList *diagnostics;
 } Lexer;
 
-Lexer *init_lexer(DiagnosticList *diagnostics);
-void free_lexer(Lexer *lexer);
+Lexer init_lexer(DiagnosticList *diagnostics);
+void reset_lexer(Lexer *lexer);
+void set_source_file(Lexer* lexer, const char *src, size_t src_len);
 
 token next_token(Lexer *lexer);
 

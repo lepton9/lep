@@ -22,7 +22,7 @@ void free_ast(AST *ast) {
   }
 }
 
-void printAST(AST *node, int indent) {
+void print_ast_typed(AST *node, int indent) {
   if (!node)
     return;
 
@@ -90,9 +90,9 @@ void printAST(AST *node, int indent) {
 
   if (indent == 0) indent++;
 
-  printAST(node->l, indent + 1);
-  printAST(node->r, indent + 1);
-  printAST(node->next, indent);
+  print_ast_typed(node->l, indent + 1);
+  print_ast_typed(node->r, indent + 1);
+  print_ast_typed(node->next, indent);
 }
 
 void print_ast(AST* node, int indent) {

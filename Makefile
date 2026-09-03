@@ -2,7 +2,7 @@ SRC := ./src
 BIN := ./bin
 OBJS := ./objs
 INC := -I ./include
-FLAGS := -c $(INC)
+FLAGS := -c $(INC) -MMD -MP
 LINK := 
 CC := gcc
 SAN_FLAGS := -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-pointer
@@ -10,13 +10,13 @@ SAN_FLAGS := -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-point
 TESTS := ./tests
 TEST_TARGETS := 
 
-OBJ := array_list diagnostic lexer parser LList token ast hashtab symtab analyzer ssair
+OBJ := array_list diagnostic lexer parser LList token ast hashtab symtab analyzer ssair cli lep main
 
-lc: $(addprefix $(OBJS)/,$(addsuffix .o,$(OBJ))) | $(BIN)
-	$(CC) $^ $(SRC)/lc.c -o $(BIN)/$@ $(LINK)
+lep: $(addprefix $(OBJS)/,$(addsuffix .o,$(OBJ))) | $(BIN)
+	$(CC) $^ -o $(BIN)/$@ $(LINK)
 
 asan: | $(BIN)
-	$(CC) $(SAN_FLAGS) $(INC) $(addprefix $(SRC)/,$(addsuffix .c,$(OBJ))) $(SRC)/lc.c -o $(BIN)/lc-asan $(LINK)
+	$(CC) $(SAN_FLAGS) $(INC) $(addprefix $(SRC)/,$(addsuffix .c,$(OBJ))) -o $(BIN)/lep-asan $(LINK)
 
 $(OBJS)/%.o: $(SRC)/%.c | $(OBJS)
 	$(CC) $(FLAGS) $< -o $@
@@ -28,7 +28,7 @@ $(BIN):
 	mkdir $(BIN)
 
 debug:
-	$(CC) $(INC) $(addprefix $(SRC)/,$(addsuffix .c,$(OBJ))) $(SRC)/lc.c -pthread -g -o $(BIN)/db $(LINK)
+	$(CC) $(INC) $(addprefix $(SRC)/,$(addsuffix .c,$(OBJ))) -pthread -g -o $(BIN)/db $(LINK)
 	gdb -tui $(BIN)/db
 
 
@@ -44,8 +44,10 @@ $(TESTS)/bin/%_test: ../testLibC/utestC.c $(TESTS)/%_test.c $(OBJ)
 	$(CC) $(INC) $^ $(LINK) -g -o $@
 
 clean:
-	rm -rf $(OBJS)/*.o $(BIN)/*
+	rm -rf $(OBJS)/* $(BIN)/*
 	rm -rf $(TESTS)/bin/*
 
 run:
-	$(BIN)/lc parseTest.lep
+	$(BIN)/lep parseTest.lep
+
+-include $(OBJS)/*.d

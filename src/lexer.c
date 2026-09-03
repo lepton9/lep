@@ -75,22 +75,27 @@ static tokenType lookup_keyword(const char *value, size_t length) {
   return T_IDENTIFIER;
 }
 
-Lexer *init_lexer(DiagnosticList *diagnostics) {
-  keyword_table_init();
-
-  Lexer *lexer = malloc(sizeof(Lexer));
+void reset_lexer(Lexer *lexer) {
   lexer->src = NULL;
   lexer->srcLen = 0;
   lexer->srcPos = 0;
   lexer->codeLoc.line = 1;
   lexer->codeLoc.column = 1;
-  lexer->diagnostics = diagnostics;
-  return lexer;
 }
 
-void free_lexer(Lexer *lexer) {
-  free(lexer->src);
-  free(lexer);
+void set_source_file(Lexer* lexer, const char *src, size_t src_len) {
+  reset_lexer(lexer);
+  lexer->src = src;
+  lexer->srcLen = src_len;
+}
+
+Lexer init_lexer(DiagnosticList *diagnostics) {
+  keyword_table_init();
+
+  Lexer lexer;
+  reset_lexer(&lexer);
+  lexer.diagnostics = diagnostics;
+  return lexer;
 }
 
 void comment(Lexer* lexer) {
@@ -108,7 +113,7 @@ static token make_token(const Lexer *lexer, tokenType type, int beg, cLoc locati
 
 token next_token(Lexer *lexer) {
   while (!at_end(lexer)) {
-    int begI = lexer->srcPos;
+    size_t begI = lexer->srcPos;
     cLoc cLocB = lexer->codeLoc;
     char c = advance(lexer);
     switch (c) {

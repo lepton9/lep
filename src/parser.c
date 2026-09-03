@@ -1,14 +1,8 @@
 #include "../include/parser.h"
-#include <stdlib.h>
 
-parser *init_parser(Lexer* lexer) {
-  parser *p = malloc(sizeof(parser));
-  p->lexer = lexer;
-  p->diagnostics = lexer->diagnostics;
-  return p;
+parser init_parser(Lexer *lexer) {
+  return (parser){.lexer = lexer, .diagnostics = lexer->diagnostics};
 }
-
-void free_parser(parser *p) { free(p); }
 
 AST *parse(parser *p) {
   p->token = next_token(p->lexer);
